@@ -1,5 +1,5 @@
 #!/bin/sh
-# shellcheck disable=SC2016,SC2034  # check는 eval로 늦게 펼친다.
+# shellcheck disable=SC2016,SC2034,SC2088  # check는 eval로 늦게 펼친다. '~'는 따옴표 친 ~ 펼침 시험용.
 # install.sh(부트스트랩) 흐름 시험. 플랫폼 확인을 건너뛰고(AIVENGERS_INSTALL_SKIP_PLATFORM=1) Node 24·pnpm 11.14.0으로 보이는
 # 가짜 실행 파일과 로컬 bare 저장소(AIVENGERS_REPO_URL)를 쓴다. gh 로그인·Homebrew·tarball 경로는 Mac에서만 확인한다.
 # 사용법: sh test/bootstrap.test.sh
