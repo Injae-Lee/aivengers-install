@@ -130,7 +130,7 @@ ensure_node() {
       "$brew" install node@24
       NODE_BIN="$("$brew" --prefix node@24)/bin/node"
     else
-      say "Node $NODE_VERSION을 내려받습니다(~/.aivengers/runtime/node)"
+      say "Node ${NODE_VERSION}을 내려받습니다(~/.aivengers/runtime/node)"
       local tmp url; tmp=$(mktemp -d)
       url="https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-darwin-arm64.tar.xz"
       curl -fsSL "$url" -o "$tmp/node.tar.xz" || die "Node를 내려받지 못했습니다: $url"
@@ -155,11 +155,11 @@ ensure_pnpm() {
   if has pnpm && [ "$(pnpm --version 2>/dev/null)" = "$PNPM_VERSION" ]; then PNPM_BIN=$(command -v pnpm)
   elif [ -x "$RUNTIME_DIR/pnpm/bin/pnpm" ]; then PNPM_BIN="$RUNTIME_DIR/pnpm/bin/pnpm"
   else
-    say "pnpm $PNPM_VERSION을 설치합니다(~/.aivengers/runtime/pnpm)"
+    say "pnpm ${PNPM_VERSION}을 설치합니다(~/.aivengers/runtime/pnpm)"
     "$(dirname "$NODE_BIN")/npm" install -g --prefix "$RUNTIME_DIR/pnpm" "pnpm@$PNPM_VERSION" >/dev/null
     PNPM_BIN="$RUNTIME_DIR/pnpm/bin/pnpm"
   fi
-  [ "$("$PNPM_BIN" --version)" = "$PNPM_VERSION" ] || die "pnpm $PNPM_VERSION을 준비하지 못했습니다($PNPM_BIN)"
+  [ "$("$PNPM_BIN" --version)" = "$PNPM_VERSION" ] || die "pnpm ${PNPM_VERSION}을 준비하지 못했습니다($PNPM_BIN)"
   PATH="$(dirname "$PNPM_BIN"):$PATH"; export PATH
   say "pnpm: $PNPM_BIN ($PNPM_VERSION)"
 }
@@ -175,7 +175,7 @@ ensure_gh() {
       "$brew" install gh
       GH_BIN=$("$brew" --prefix)/bin/gh
     else
-      say "gh $GH_VERSION을 내려받습니다(~/.aivengers/runtime/gh)"
+      say "gh ${GH_VERSION}을 내려받습니다(~/.aivengers/runtime/gh)"
       local tmp; tmp=$(mktemp -d)
       curl -fsSL "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip" -o "$tmp/gh.zip" \
         || die "gh를 내려받지 못했습니다"
@@ -223,18 +223,18 @@ clone_or_update() {
     case "$url" in
       *"$REPO_SLUG"*|*"$REPO_SLUG.git") ;;
       *) if [ -z "${AIVENGERS_REPO_URL:-}" ] || [ "$url" != "$AIVENGERS_REPO_URL" ]; then
-           die "$DIR는 다른 저장소입니다($url). --dir로 다른 위치를 고르세요"
+           die "${DIR}는 다른 저장소입니다($url). --dir로 다른 위치를 고르세요"
          fi ;;
     esac
     if [ -n "$(git -C "$DIR" status --porcelain --untracked-files=no)" ]; then
-      die "$DIR에 고친 파일이 있어 갱신하지 않습니다. 그 변경을 정리한 뒤 다시 실행하세요"
+      die "${DIR}에 고친 파일이 있어 갱신하지 않습니다. 그 변경을 정리한 뒤 다시 실행하세요"
     fi
     say "저장소 갱신: $DIR ($BRANCH)"
     git -C "$DIR" fetch --tags origin
     git -C "$DIR" checkout -q "$BRANCH"
     if git -C "$DIR" symbolic-ref -q HEAD >/dev/null; then git -C "$DIR" pull -q --ff-only origin "$BRANCH"; fi
   else
-    [ -e "$DIR" ] && [ -n "$(ls -A "$DIR" 2>/dev/null)" ] && die "$DIR가 비어 있지 않은 폴더입니다. --dir로 다른 위치를 고르세요"
+    [ -e "$DIR" ] && [ -n "$(ls -A "$DIR" 2>/dev/null)" ] && die "${DIR}가 비어 있지 않은 폴더입니다. --dir로 다른 위치를 고르세요"
     say "저장소 받기: $DIR"
     git clone -q --branch "$BRANCH" "$GIT_URL" "$DIR"
   fi
@@ -257,7 +257,7 @@ main() {
   [ -f "$body" ] || die "본체 설치기($body)가 없습니다. --branch를 확인하세요"
   say "본체 설치기로 넘깁니다"
   AIVENGERS_NODE="$NODE_BIN" AIVENGERS_PNPM="$PNPM_BIN" AIVENGERS_STATE_DIR="$STATE_DIR" \
-    exec bash "$body" --dir "$DIR" --from-bootstrap "${PASS_ARGS[@]+"${PASS_ARGS[@]}"}"
+    exec "${BASH:-bash}" "$body" --dir "$DIR" --from-bootstrap "${PASS_ARGS[@]+"${PASS_ARGS[@]}"}"
 }
 
 main "$@"

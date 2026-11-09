@@ -2,7 +2,7 @@
 # shellcheck disable=SC2016,SC2034,SC2088  # check는 eval로 늦게 펼친다. '~'는 따옴표 친 ~ 펼침 시험용.
 # install.sh(부트스트랩) 흐름 시험. 플랫폼 확인을 건너뛰고(AIVENGERS_INSTALL_SKIP_PLATFORM=1) Node 24·pnpm 11.14.0으로 보이는
 # 가짜 실행 파일과 로컬 bare 저장소(AIVENGERS_REPO_URL)를 쓴다. gh 로그인·Homebrew·tarball 경로는 Mac에서만 확인한다.
-# 사용법: sh test/bootstrap.test.sh
+# 사용법: sh test/bootstrap.test.sh   (BOOT_BASH=/bin/bash로 macOS 기본 bash 3.2에서 돌린다)
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -34,7 +34,7 @@ git clone -q --bare "$T/src" "$T/remote.git"
 run() {
   set +e
   env HOME="$H" PATH="$T/bin:$PATH" AIVENGERS_INSTALL_SKIP_PLATFORM=1 AIVENGERS_REPO_URL="$T/remote.git" \
-    bash "$BOOT" "$@" >"$T/out" 2>&1
+    "${BOOT_BASH:-bash}" "$BOOT" "$@" >"$T/out" 2>&1
   RC=$?
   set -e
 }
@@ -53,6 +53,11 @@ git -C "$T/src" push -q "$T/remote.git" main
 run --dir "$H/Aivengers-desktop"
 check '[ "$RC" -eq 0 ] && [ -f "$H/Aivengers-desktop/new.txt" ]' "두 번째 실행은 fast-forward로 갱신"
 
+: >"$H/Aivengers-desktop/aivengers-desktop-0.0.0.tgz"
+run --dir "$H/Aivengers-desktop"
+check '[ "$RC" -eq 0 ]' "추적하지 않는 파일(지난 실패의 tarball)은 갱신을 막지 않음"
+rm -f "$H/Aivengers-desktop/aivengers-desktop-0.0.0.tgz"
+
 echo dirty >>"$H/Aivengers-desktop/scripts/install.sh"
 run --dir "$H/Aivengers-desktop"
 check '[ "$RC" -ne 0 ] && grep -q "고친 파일이 있어" "$T/out"' "고친 checkout은 갱신하지 않고 멈춤"
@@ -68,6 +73,11 @@ check '[ "$RC" -eq 0 ] && grep -q "^--dir$" "$T/body-args" && grep -q "^$H/Aiven
 
 env HOME="$H" AIVENGERS_INSTALL_SKIP_PLATFORM= bash -c 'uname() { [ "$1" = -s ] && echo Linux || echo x86_64; }; export -f uname; bash "$0" --dir "$HOME/z"' "$BOOT" >"$T/out" 2>&1 && RC=0 || RC=$?
 check '[ "$RC" -ne 0 ] && grep -q "macOS만 지원" "$T/out"' "macOS 아니면 멈춤"
+
+# $이름 바로 뒤에 비ASCII(한글 등)가 붙으면 macOS bash 3.2가 변수 이름을 잘못 읽는다('out이: unbound variable'). ${이름}으로 감싼다.
+BAD=$(perl -ne 'next if /^\s*#/; print "$.: $_" if /(?<!\\)\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]/' "$BOOT" || true)
+check '[ -z "$BAD" ]' "install.sh에 \${이름}으로 감싸지 않은 변수 없음"
+[ -z "$BAD" ] || printf '%s\n' "$BAD"
 
 echo "== $PASSES 통과, $FAILS 실패"
 [ "$FAILS" -eq 0 ]

@@ -8,8 +8,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check:
+  linux:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -17,3 +21,15 @@ jobs:
         run: shellcheck install.sh test/bootstrap.test.sh
       - name: test
         run: sh test/bootstrap.test.sh
+
+  # 사용자 Mac과 같은 macOS 기본 bash(3.2)로 돌린다. 리눅스 bash에서 안 보이던 문제(비ASCII 뒤 변수 이름 등)를 잡는다.
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: test (/bin/bash)
+        run: |
+          /bin/bash --version | head -n 1
+          BOOT_BASH=/bin/bash sh test/bootstrap.test.sh
+      - name: 플랫폼 확인을 켠 채 도움말
+        run: /bin/bash install.sh --help
