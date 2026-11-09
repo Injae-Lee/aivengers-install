@@ -53,6 +53,18 @@ git -C "$T/src" push -q "$T/remote.git" main
 run --dir "$H/Aivengers-desktop"
 check '[ "$RC" -eq 0 ] && [ -f "$H/Aivengers-desktop/new.txt" ]' "두 번째 실행은 fast-forward로 갱신"
 
+# 브랜치로 받은 기존 설치를 기본 실행(--branch 없음 = main)이 main으로 옮기는지
+git -C "$T/src" checkout -q -b feat-x
+echo f >"$T/src/feat.txt"
+git -C "$T/src" -c user.email=t@t -c user.name=t add -A
+git -C "$T/src" -c user.email=t@t -c user.name=t commit -qm feat
+git -C "$T/src" push -q "$T/remote.git" feat-x
+git -C "$T/src" checkout -q main
+run --dir "$H/Aivengers-desktop" --branch feat-x
+check '[ "$RC" -eq 0 ] && [ "$(git -C "$H/Aivengers-desktop" rev-parse --abbrev-ref HEAD)" = feat-x ]' "--branch로 다른 브랜치 checkout"
+run --dir "$H/Aivengers-desktop"
+check '[ "$RC" -eq 0 ] && [ "$(git -C "$H/Aivengers-desktop" rev-parse --abbrev-ref HEAD)" = main ] && [ ! -f "$H/Aivengers-desktop/feat.txt" ]' "기본 실행은 main으로 돌아옴"
+
 : >"$H/Aivengers-desktop/aivengers-desktop-0.0.0.tgz"
 run --dir "$H/Aivengers-desktop"
 check '[ "$RC" -eq 0 ]' "추적하지 않는 파일(지난 실패의 tarball)은 갱신을 막지 않음"

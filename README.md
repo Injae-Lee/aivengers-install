@@ -36,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/Injae-Lee/aivengers-install/main/in
 ## 로그
 
 - `~/.aivengers/logs/bootstrap-*.log`, 본체는 `install-*.log`
-- 문제가 나면 마지막 로그를 Dylan에게 보냅니다
+- 문제가 나면 마지막 로그를 초대한 사람에게 보냅니다
 
 ## 개발
 
