@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/Injae-Lee/aivengers-install/main/install.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/Injae-Lee/aivengers-install/main/install.sh | bash -s -- --dir ~/Aivengers-desktop --port 45280
 #
-# 하는 일(얇게): macOS(Apple Silicon) 확인 → git(Xcode CLT) → Node 24 → pnpm → gh 로그인 → 비공개 저장소 clone·갱신
+# 하는 일(얇게): macOS(Apple Silicon) 확인 → git(Xcode CLT) → Node 24 이상 → pnpm → gh 로그인 → 비공개 저장소 clone·갱신
 # → 저장소 안의 scripts/install.sh(본체)로 넘긴다. 빌드·앱 놓기·설정은 본체가 한다(저장소 코드와 함께 바뀌어 판이 어긋나지 않음).
 # 이 파일에는 비밀값·내부 주소를 넣지 않는다.
 #
@@ -110,17 +110,24 @@ ensure_git() {
 }
 
 node_major() { "$1" --version 2>/dev/null | sed -n 's/^v\([0-9]*\)\..*/\1/p'; }
+# Node 24 이상이면 참(상한 없음). 본체 scripts/install.sh와 같은 하한이다.
+NODE_MIN_MAJOR=24
+node_ok() {
+  local m; m=$(node_major "$1")
+  case "$m" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$m" -ge "$NODE_MIN_MAJOR" ]
+}
 
 sha256_of() {
   if has shasum; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi
 }
 
-# Node 24: PATH의 node가 v24면 그대로 쓴다. 아니면 Homebrew node@24, 없으면 공식 tarball(sha256 고정)을 ~/.aivengers/runtime에.
+# Node 24 이상: PATH의 node가 24 이상이면 그대로 쓴다. 아니면 Homebrew node@24, 없으면 공식 tarball(sha256 고정)을 ~/.aivengers/runtime에.
 # 다른 판의 node는 건드리지 않는다.
 NODE_BIN=""
 ensure_node() {
-  if has node && [ "$(node_major node)" = 24 ]; then NODE_BIN=$(command -v node)
-  elif [ -x "$RUNTIME_DIR/node/bin/node" ] && [ "$(node_major "$RUNTIME_DIR/node/bin/node")" = 24 ]; then NODE_BIN="$RUNTIME_DIR/node/bin/node"
+  if has node && node_ok node; then NODE_BIN=$(command -v node)
+  elif [ -x "$RUNTIME_DIR/node/bin/node" ] && node_ok "$RUNTIME_DIR/node/bin/node"; then NODE_BIN="$RUNTIME_DIR/node/bin/node"
   else
     local brew; brew=$(brew_bin)
     if [ -n "$brew" ] && "$brew" list --versions node@24 >/dev/null 2>&1; then
@@ -144,7 +151,7 @@ ensure_node() {
       NODE_BIN="$RUNTIME_DIR/node/bin/node"
     fi
   fi
-  [ "$(node_major "$NODE_BIN")" = 24 ] || die "Node 24를 준비하지 못했습니다($NODE_BIN)"
+  node_ok "$NODE_BIN" || die "Node ${NODE_MIN_MAJOR} 이상을 준비하지 못했습니다($NODE_BIN)"
   PATH="$(dirname "$NODE_BIN"):$PATH"; export PATH
   say "node: $NODE_BIN ($("$NODE_BIN" --version))"
 }

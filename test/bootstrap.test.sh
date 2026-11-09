@@ -17,7 +17,7 @@ T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 H=$T/home
 mkdir -p "$H" "$T/bin" "$T/src/scripts"
-printf '#!/bin/sh\n[ "$1" = --version ] && { echo v24.22.2; exit 0; }\nexit 0\n' >"$T/bin/node"
+printf '#!/bin/sh\n[ "$1" = --version ] && { echo "${FAKE_NODE_VER:-v24.22.2}"; exit 0; }\nexit 0\n' >"$T/bin/node"
 printf '#!/bin/sh\n[ "$1" = --version ] && { echo 11.14.0; exit 0; }\nexit 0\n' >"$T/bin/pnpm"
 chmod +x "$T/bin/"*
 # 본체 자리: 받은 인자·환경을 남긴다
@@ -45,6 +45,12 @@ check '[ -f "$H/Aivengers-desktop/scripts/install.sh" ]' "clone"
 check '[ "$(tr "\n" " " <"$T/body-args")" = "--dir $H/Aivengers-desktop --from-bootstrap --port 45280 --no-launch " ]' "본체에 --dir과 나머지 옵션을 넘김"
 check 'grep -q "^node=$T/bin/node$" "$T/body-env" && grep -q "^pnpm=$T/bin/pnpm$" "$T/body-env" && grep -q "^state=$H/.aivengers$" "$T/body-env"' "본체에 node·pnpm·상태 폴더 넘김"
 check 'ls "$H/.aivengers/logs"/bootstrap-*.log >/dev/null' "로그 파일"
+
+# Node 24 이상이면 PATH의 node를 그대로 쓴다(26 포함, AIV-271 후속)
+export FAKE_NODE_VER=v26.13.0
+run --dir "$H/Aivengers-desktop" --no-launch
+check '[ "$RC" -eq 0 ] && grep -q "^node=$T/bin/node$" "$T/body-env" && grep -q "v26.13.0" "$T/out"' "Node 26은 PATH의 것을 그대로 씀"
+unset FAKE_NODE_VER
 
 echo b >"$T/src/new.txt"
 git -C "$T/src" -c user.email=t@t -c user.name=t add -A

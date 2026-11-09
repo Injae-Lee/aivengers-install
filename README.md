@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/Injae-Lee/aivengers-install/main/in
 
 - macOS·arm64 확인
 - git(Xcode Command Line Tools 또는 Homebrew)
-- Node 24(PATH의 v24 → Homebrew `node@24` → 공식 tarball, sha256 고정)
+- Node 24 이상(PATH의 node가 24 이상이면 그것 → 없으면 Homebrew `node@24` → 공식 tarball 24, sha256 고정)
 - pnpm 11.14.0(`~/.aivengers/runtime/pnpm`)
 - gh 로그인(브라우저 기기 인증)과 저장소 접근 확인
 - clone(기본 `~/Aivengers-desktop`) 또는 fast-forward 갱신
