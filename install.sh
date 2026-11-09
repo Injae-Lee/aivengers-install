@@ -196,11 +196,11 @@ ensure_gh() {
   fi
   "$GH_BIN" auth setup-git -h github.com
   "$GH_BIN" repo view "$REPO_SLUG" --json name >/dev/null 2>&1 \
-    || die "$REPO_SLUG 저장소에 접근할 수 없습니다. Dylan에게 초대를 받은 뒤(메일에서 수락) 다시 실행하세요. 초대 대신 --deploy-key를 쓸 수도 있습니다"
+    || die "$REPO_SLUG 저장소에 접근할 수 없습니다. 저장소 주인에게 초대를 받은 뒤(메일에서 수락) 다시 실행하세요. 초대 대신 --deploy-key를 쓸 수도 있습니다"
   say "gh: 로그인됨, 저장소 접근 확인"
 }
 
-# 읽기 전용 deploy key: 키를 만들고 공개 키를 보여 준다. Dylan이 저장소 Deploy keys에 넣은 뒤 다시 실행한다.
+# 읽기 전용 deploy key: 키를 만들고 공개 키를 보여 준다. 저장소 주인이 저장소 Deploy keys에 넣은 뒤 다시 실행한다.
 GIT_URL=""
 ensure_deploy_key() {
   local key="$STATE_DIR/deploy_key"
@@ -210,7 +210,7 @@ ensure_deploy_key() {
   fi
   export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
   if ! git ls-remote "git@github.com:$REPO_SLUG.git" HEAD >/dev/null 2>&1; then
-    say "아래 공개 키를 Dylan에게 보내 저장소 Deploy keys(읽기 전용)에 넣어 달라고 하세요. 넣은 뒤 같은 명령을 다시 실행합니다"
+    say "아래 공개 키를 저장소 주인에게 보내 저장소 Deploy keys(읽기 전용)에 넣어 달라고 하세요. 넣은 뒤 같은 명령을 다시 실행합니다"
     cat "$key.pub"
     exit 2
   fi
