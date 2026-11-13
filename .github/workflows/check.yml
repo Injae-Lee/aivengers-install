@@ -43,14 +43,14 @@ jobs:
           [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path install.ps1), [ref]$null, [ref]$e)
           if ($e) { $e | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" }; exit 1 }
           "parse ok ($($PSVersionTable.PSVersion))"
-      - name: 배포판이 없으면 설치 안내로 멈춤
+      - name: WSL·배포판이 없으면 dry-run이 할 일만 찍고 0으로 끝남(AIV-616)
         shell: powershell
         run: |
           $out = & powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Distro Aivengers-CI-None -DryRun -NoBrowser 2>&1 | Out-String
           $code = $LASTEXITCODE
           $out
-          if ($code -eq 0) { "0으로 끝남(배포판 없음인데)"; exit 1 }
-          if ($out -notmatch 'wsl') { "WSL 안내 없음"; exit 1 }
+          if ($code -ne 0) { "dry-run 실패(종료 코드 $code)"; exit 1 }
+          if ($out -notmatch '\(dry-run\).*wsl') { "WSL 설치 dry-run 줄 없음"; exit 1 }
 
   # 사용자 Mac과 같은 macOS 기본 bash(3.2)로 돌린다. 리눅스 bash에서 안 보이던 문제(비ASCII 뒤 변수 이름 등)를 잡는다.
   macos:
