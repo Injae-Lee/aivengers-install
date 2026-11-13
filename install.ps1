@@ -14,8 +14,14 @@
   돌아 혹시 sudo가 필요해도 기다리지 않고 실패한다. 에이전트(Claude Code 등)가 백그라운드로 돌려도 멈춰 서지 않는다.
   GitHub 로그인은 화면에 8자리 일회용 코드를 찍고 사람이 https://github.com/login/device 에서 승인할 때까지 기다린다(최대 약 15분).
 
-  사람 손 단계: WSL 설치(관리자 권한·재부팅), 배포판 첫 실행의 사용자 만들기, GitHub 기기 코드 승인(또는 deploy key 등록),
-  Claude 로그인, Slack 토큰.
+  WSL부터(AIV-616): WSL이 없으면 스스로 관리자 권한을 요청(UAC)해 'wsl --install --no-distribution'(안 되면 기능 켜기)을 한다.
+  재부팅이 필요하면 로그온 때 한 번 도는 이어 하기(HKCU RunOnce)를 등록하고 종료 코드 3010으로 끝난다(-RebootNow면 바로 재부팅,
+  창에서 직접 돌렸으면 물어봄). 다시 로그인하면 PowerShell 창이 떠서 같은 옵션으로 설치를 이어 간다(Claude 대화가 필요 없음).
+  배포판이 없으면 '--no-launch --web-download'로 깔고, 첫 실행 질문 없이 Windows 사용자 이름으로 사용자를 만들어 기본 사용자로 둔다.
+  끝나면 Claude 로그인 터미널 창을 띄운다(이미 로그인돼 있으면 건너뜀). 기록: %LOCALAPPDATA%\Aivengers\logs\install-*.log
+
+  사람 손 단계(화면 승인뿐): UAC '예'(WSL을 처음 켤 때), 재부팅(WSL 기능이 처음 켜질 때만), GitHub 기기 코드 승인(또는 deploy key 등록),
+  Claude 로그인 브라우저 승인, Slack 토큰(웹 설정).
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File install.ps1
@@ -48,11 +54,21 @@ param(
   # 확인만 하고 바꾸지 않는다(WSL 안 설치기도 --dry-run).
   [switch]$DryRun,
   # 끝나고 브라우저를 열지 않는다.
-  [switch]$NoBrowser
+  [switch]$NoBrowser,
+  # 끝에 Claude 로그인 창을 띄우지 않는다.
+  [switch]$NoClaudeLogin,
+  # WSL을 켜느라 재부팅이 필요하면 묻지 않고 30초 뒤 재부팅한다(이어 하기는 그대로 등록).
+  [switch]$RebootNow,
+  # 내부용: 재부팅 뒤 RunOnce가 붙인다(이어 하기 표시만).
+  [switch]$Resume,
+  # 내부용: UAC로 올라간 관리자 프로세스가 WSL 기능만 켜고 끝난다.
+  [switch]$ElevatedWslSetup
 )
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+# 재부팅 이어 하기에 같은 옵션을 다시 붙이려고 남긴다(함수 안의 $PSBoundParameters는 그 함수 것이다).
+$BoundArgs = $PSBoundParameters
 # WSL 안 출력(UTF-8)과 한국어 안내가 깨지지 않게. WSL_UTF8=1이면 wsl.exe 자체 출력도 UTF-8이다.
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $env:WSL_UTF8 = '1'
@@ -143,20 +159,192 @@ function Find-WindowsNode24 {
   return ''
 }
 
-# ---- 1 Windows·WSL 확인 ----
-if ($env:OS -ne 'Windows_NT') { Exit-Install 'Windows에서 돌리는 설치기입니다. Linux는 scripts/install.sh, Mac은 scripts/install.sh' }
-if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
-  Exit-Install "WSL이 없습니다. 관리자 PowerShell에서 'wsl --install -d $Distro' 뒤 재부팅하고, 배포판을 한 번 열어 사용자를 만든 다음 이 설치기를 다시 돌리세요"
+# ---- WSL 켜기·재부팅 이어 하기·사용자 만들기(AIV-616) ----
+# 설치기 자리(%LOCALAPPDATA%\Aivengers): 기록·이어 하기 사본·desktop.json
+$AppDir = Join-Path $(if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } elseif ($env:USERPROFILE) { Join-Path $env:USERPROFILE 'AppData\Local' } else { [System.IO.Path]::GetTempPath() }) 'Aivengers'
+
+# WSL이 돌 수 있는지(기능 켜짐·재부팅 끝). 없는 기능이면 wsl --status가 0이 아니다.
+function Test-WslReady {
+  if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { return $false }
+  & wsl.exe --status *> $null
+  return ($LASTEXITCODE -eq 0)
 }
-& wsl.exe --status *> $null
-if ($LASTEXITCODE -ne 0) {
-  Exit-Install "WSL이 켜져 있지 않습니다. 관리자 PowerShell에서 'wsl --install -d $Distro' 뒤 재부팅하세요"
+
+# 사람이 창에서 직접 돌리는지(에이전트의 백그라운드 실행이면 입출력이 넘겨져 있다).
+function Test-InteractiveConsole {
+  return ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected)
+}
+
+# 이 실행의 옵션을 다시 붙일 인자 문자열(내부용 스위치는 뺌).
+function Get-PassThroughArg {
+  $skip = @('Resume', 'RebootNow', 'ElevatedWslSetup', 'DryRun')
+  $parts = @()
+  foreach ($k in $script:BoundArgs.Keys) {
+    if ($skip -contains $k) { continue }
+    $v = $script:BoundArgs[$k]
+    if ($v -is [System.Management.Automation.SwitchParameter]) { if ($v.IsPresent) { $parts += "-$k" } }
+    else { $parts += "-$k `"$($v -replace '"', '')`"" }
+  }
+  return ($parts -join ' ')
+}
+
+# UAC로 같은 스크립트를 관리자 권한으로 띄워 WSL 기능만 켠다. 종료 코드(1223 = UAC 거절).
+function Invoke-ElevatedWslSetup {
+  if (-not $PSCommandPath) { Exit-Install "파일로 받아 '-File'로 돌려야 관리자 단계를 띄울 수 있습니다(irm … -OutFile 뒤 powershell -File)" }
+  try {
+    $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru `
+      -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -ElevatedWslSetup"
+    return $p.ExitCode
+  } catch {
+    Write-Host "관리자 권한을 받지 못했습니다: $($_.Exception.Message)"
+    return 1223
+  }
+}
+
+# 재부팅 뒤 로그온 때 한 번 도는 이어 하기(HKCU RunOnce → resume.cmd → 이 스크립트 사본 -Resume). RunOnce 값은 260자 한도라 cmd로 감싼다.
+function Register-ResumeAfterReboot {
+  $copy = Join-Path $AppDir 'install.ps1'
+  if ($PSCommandPath -and ((Resolve-Path -LiteralPath $PSCommandPath).Path -ne $copy)) {
+    New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
+    Copy-Item -LiteralPath $PSCommandPath -Destination $copy -Force
+  }
+  $cmd = Join-Path $AppDir 'resume.cmd'
+  $line = "powershell.exe -NoProfile -ExecutionPolicy Bypass -NoExit -File `"$copy`" $(Get-PassThroughArg) -Resume"
+  $text = "@echo off`r`nchcp 65001 >nul`r`ntitle Aivengers 설치 이어 하기`r`n$line`r`n"
+  [System.IO.File]::WriteAllText($cmd, $text, (New-Object System.Text.UTF8Encoding($false)))
+  $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce'
+  if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+  New-ItemProperty -Path $key -Name 'AivengersInstall' -Value "`"$cmd`"" -PropertyType String -Force | Out-Null
+  Write-Step "이어 하기 등록: $cmd (로그온 때 한 번)"
+}
+
+# Windows 사용자 이름 → 리눅스 사용자 이름(소문자·영숫자·_-, 32자, 예약 이름 피함). 못 쓰면 aivengers.
+function ConvertTo-LinuxUserName([string]$Name) {
+  $n = ("$Name".ToLowerInvariant() -replace '[^a-z0-9_-]', '')
+  $n = $n -replace '^[^a-z_]+', ''
+  if ($n.Length -gt 32) { $n = $n.Substring(0, 32) }
+  if (-not $n -or @('root', 'docker', 'daemon', 'bin', 'sys', 'nobody', 'ubuntu', 'admin', 'sudo') -contains $n) { $n = 'aivengers' }
+  return $n
+}
+
+# 배포판 사용자 만들기(root로). 첫 사용자라 uid 1000(봇 컴퓨터와 같음). 비밀번호는 잠가 둔다(관리는 'wsl -u root').
+$NewUserScript = @'
+set -eu
+U=__USER__
+if ! id "$U" >/dev/null 2>&1; then
+  useradd -m -s /bin/bash -G sudo "$U"
+fi
+f=${AIV_WSL_CONF:-/etc/wsl.conf}
+touch "$f"
+if grep -q '^\[user\]' "$f"; then
+  sed -i '/^\[user\]/,/^\[/{/^default[[:space:]]*=/d}' "$f"
+  sed -i "/^\[user\]/a default=$U" "$f"
+else
+  printf '\n[user]\ndefault=%s\n' "$U" >> "$f"
+fi
+echo "==> 사용자 $U (uid $(id -u "$U")), 기본 사용자로 둠"
+'@
+
+# Claude 로그인 창(배포판 터미널). docker exec -it라 표준 입력이 터미널이어야 해서 스크립트를 파일로 쓴 뒤 bash로 돌린다.
+$ClaudeLoginScript = @'
+echo "Aivengers: Claude 로그인"
+echo "아래 주소를 브라우저에서 열어 승인하고, 받은 코드를 이 창에 붙여 넣으세요."
+docker exec -it aivengers-server-1 claude auth login --claudeai
+echo
+docker exec aivengers-server-1 claude auth status 2>/dev/null | grep -E 'loggedIn' || true
+read -r -p "끝나면 Enter로 이 창을 닫으세요 " _
+'@
+
+function Open-ClaudeLoginWindow {
+  $logged = Get-InDistroLine "docker exec aivengers-server-1 claude auth status 2>/dev/null | grep -Eq '`"loggedIn`"[[:space:]]*:[[:space:]]*true' && echo yes || echo no"
+  if ($logged -contains 'yes') { Write-Step 'Claude 로그인 돼 있음(건너뜀)'; return }
+  $b64 = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes(($ClaudeLoginScript -replace "`r`n", "`n")))
+  Start-Process -FilePath 'wsl.exe' -ArgumentList "-d $Distro -- bash -c `"echo $b64 | base64 -d > /tmp/aivengers-claude-login.sh; exec bash /tmp/aivengers-claude-login.sh`""
+  Write-Step 'Claude 로그인 창을 띄웠습니다. 그 창의 주소를 브라우저에서 열어 승인하고 코드를 붙여 넣으세요'
+  Write-Host 'CLAUDE_LOGIN_WINDOW: 새 터미널 창에서 로그인을 마치세요'
+}
+
+# ---- 0 관리자 단계(UAC로 올라온 프로세스, AIV-616) ----
+# WSL 기능만 켜고 끝난다. 0 = 됨(재부팅 필요 여부는 부른 쪽이 wsl --status로 판단), 그 밖 = 실패.
+if ($ElevatedWslSetup) {
+  $log = Join-Path $AppDir ("logs\install-admin-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
+  Start-Transcript -Path $log -Append | Out-Null
+  try {
+    Write-Step 'WSL 켜기(관리자): wsl --install --no-distribution'
+    & wsl.exe --install --no-distribution
+    if ($LASTEXITCODE -ne 0) {
+      # 옛 Windows 10은 --no-distribution을 모른다. 기능 두 개를 직접 켠다(재부팅 뒤 wsl --update).
+      Write-Step 'wsl --install이 실패해 Windows 기능을 직접 켭니다(Microsoft-Windows-Subsystem-Linux, VirtualMachinePlatform)'
+      foreach ($f in @('Microsoft-Windows-Subsystem-Linux', 'VirtualMachinePlatform')) {
+        & dism.exe /online /enable-feature /featurename:$f /all /norestart
+        # 3010 = 켰고 재부팅 필요
+        if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) { Write-Host "실패: $f 기능을 켜지 못했습니다(dism $LASTEXITCODE)"; exit 1 }
+      }
+    }
+    try { & wsl.exe --update | Out-Null } catch { Write-Host "wsl --update 건너뜀: $($_.Exception.Message)" }
+    exit 0
+  } finally { Stop-Transcript | Out-Null }
+}
+
+# 설치 기록(에이전트·사람이 나중에 읽음). 비밀값은 찍지 않는다(gh 토큰은 배포판 안에만 있음).
+New-Item -ItemType Directory -Force -Path (Join-Path $AppDir 'logs') | Out-Null
+$LogFile = Join-Path $AppDir ("logs\install-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
+Start-Transcript -Path $LogFile -Append | Out-Null
+Write-Step "설치 기록: $LogFile"
+if ($Resume) { Write-Step '재부팅 뒤 설치를 이어 갑니다' }
+
+# ---- 1 Windows·WSL 확인(없으면 켜기, AIV-616) ----
+if ($env:OS -ne 'Windows_NT') { Exit-Install 'Windows에서 돌리는 설치기입니다. Linux는 scripts/install.sh, Mac은 scripts/install.sh' }
+if ([Environment]::OSVersion.Version.Build -lt 19041) {
+  Exit-Install "Windows 10 2004(빌드 19041) 이상이 필요합니다(지금 $([Environment]::OSVersion.Version)). Windows 업데이트 뒤 다시 돌리세요"
+}
+
+if (-not (Test-WslReady)) {
+  if ($DryRun) { Write-Step '(dry-run) WSL이 없음 → 관리자 권한 요청(UAC) → wsl --install --no-distribution → 필요하면 재부팅·이어 하기 등록' }
+  else {
+    Write-Step 'WSL이 꺼져 있습니다. 관리자 권한을 요청합니다 — 화면의 사용자 계정 컨트롤(UAC)에서 "예"를 누르세요'
+    $code = Invoke-ElevatedWslSetup
+    if ($code -ne 0) { Exit-Install "WSL을 켜지 못했습니다(관리자 단계 종료 코드 $code). UAC에서 '아니요'를 눌렀다면 다시 돌리세요. 기록: $(Join-Path $AppDir 'logs')" }
+    if (-not (Test-WslReady) -and $Resume) {
+      # 재부팅을 한 번 했는데도 안 되면 다시 재부팅을 돌지 않고 멈춘다(가상화 꺼짐 등).
+      Exit-Install "재부팅 뒤에도 WSL이 돌지 않습니다. BIOS 가상화(VT-x/AMD-V)가 켜져 있는지, 'wsl --status' 출력을 확인하세요"
+    }
+    if (-not (Test-WslReady)) {
+      # 기능을 처음 켰으면 재부팅해야 WSL이 돈다. 로그온 때 이어 하도록 등록하고 끝낸다.
+      Register-ResumeAfterReboot
+      Write-Step '재부팅이 필요합니다. 다시 로그인하면 PowerShell 창이 떠서 설치를 저절로 이어 갑니다(Claude 대화 없이)'
+      Stop-Transcript | Out-Null
+      if ($RebootNow) {
+        & shutdown.exe /r /t 30 /c 'Aivengers 설치: WSL을 켜려고 재부팅합니다. 다시 로그인하면 설치가 이어집니다'
+      } elseif (Test-InteractiveConsole) {
+        $ans = Read-Host '지금 재부팅할까요? (y/N)'
+        if ($ans -match '^(y|yes|예|ㅇ)$') { & shutdown.exe /r /t 10 /c 'Aivengers 설치: 재부팅 뒤 이어집니다' }
+      }
+      Write-Host 'REBOOT_REQUIRED: 재부팅 뒤 로그인하면 설치가 이어집니다(종료 코드 3010)'
+      exit 3010
+    }
+  }
 }
 
 $distros = Get-WslLine @('-l', '-q')
 if ($distros -notcontains $Distro) {
-  $have = if ($distros.Count -gt 0) { $distros -join ', ' } else { '없음' }
-  Exit-Install "WSL 배포판 '$Distro'가 없습니다(있는 것: $have). 'wsl --install -d $Distro'로 설치하고 한 번 열어 사용자를 만든 뒤 다시 돌리세요. 다른 배포판은 -Distro <이름>"
+  if ($DryRun) { Write-Step "(dry-run) wsl --install -d $Distro --no-launch --web-download → 사용자 만들기" }
+  else {
+    Write-Step "WSL 배포판 $Distro 설치(첫 실행 창 없이, 몇 분)"
+    & wsl.exe --install -d $Distro --no-launch --web-download
+    if ($LASTEXITCODE -ne 0) {
+      # 옛 wsl.exe는 --web-download를 모를 수 있다(스토어로 받음).
+      & wsl.exe --install -d $Distro --no-launch
+    }
+    $distros = Get-WslLine @('-l', '-q')
+    if ($distros -notcontains $Distro) { Exit-Install "배포판 $Distro 를 설치하지 못했습니다. 'wsl --list --online'으로 이름을 확인하거나 -Distro <이름>" }
+  }
+}
+if ($DryRun -and ((-not (Test-WslReady)) -or ($distros -notcontains $Distro))) {
+  Write-Step '(dry-run) WSL·배포판이 아직 없어 나머지(배포판 안 확인)는 실제 설치 때 합니다'
+  Stop-Transcript | Out-Null
+  exit 0
 }
 
 # 버전(1·2). 'wsl -l -v'의 마지막 칸.
@@ -196,11 +384,22 @@ fi
 }
 
 # ---- 3 기본 사용자 ----
-# 배포판 첫 실행에서 만든 사용자(보통 uid 1000). root면 사용자를 만들지 않은 것이다.
+# 배포판 첫 실행에서 만든 사용자(보통 uid 1000). root면(--no-launch로 깔아 첫 실행 질문을 건너뜀) 대화 없이 만든다(AIV-616):
+# Windows 사용자 이름을 리눅스 규칙에 맞춘 이름, 비밀번호 없음(잠김. 관리 작업은 Windows에서 'wsl -u root'), /etc/wsl.conf [user] default.
 $wslUser = Get-WslLine @('-d', $Distro, '--', 'id', '-un') | Select-Object -First 1
 if (-not $wslUser) { Exit-Install "배포판 '$Distro'의 기본 사용자를 읽지 못했습니다" }
 if ($wslUser -eq 'root') {
-  Exit-Install "배포판 '$Distro'의 기본 사용자가 root입니다. 배포판을 한 번 열어 사용자를 만든 뒤 다시 돌리세요"
+  $newUser = ConvertTo-LinuxUserName $env:USERNAME
+  if ($DryRun) { Write-Step "(dry-run) 사용자 $newUser 만들기(uid 1000 자리), /etc/wsl.conf [user] default=$newUser" }
+  else {
+    Write-Step "배포판 사용자 $newUser 를 만듭니다(첫 실행 질문 없이)"
+    $mkUser = $NewUserScript.Replace('__USER__', (ConvertTo-BashQuoted $newUser))
+    if ((Invoke-InDistro $mkUser -AsRoot) -ne 0) { Exit-Install "사용자 $newUser 를 만들지 못했습니다" }
+    & wsl.exe --terminate $Distro | Out-Null
+    Start-Sleep -Seconds 3
+    $wslUser = Get-WslLine @('-d', $Distro, '--', 'id', '-un') | Select-Object -First 1
+    if ($wslUser -ne $newUser) { Exit-Install "기본 사용자가 $newUser 로 바뀌지 않았습니다(지금 '$wslUser'). /etc/wsl.conf의 [user] 절을 확인하세요" }
+  }
 }
 Write-Step "WSL 사용자 $wslUser"
 
@@ -397,3 +596,7 @@ elseif ($paths.Count -ge 2) {
 $url = "http://127.0.0.1:$Port"
 Write-Step "끝. 브라우저: $url"
 if (-not $DryRun -and -not $NoBrowser) { Start-Process $url }
+# Claude 로그인(사람 손: 브라우저 승인·코드 붙여넣기). 새 터미널 창이라 에이전트가 대신 치지 않는다.
+if (-not $DryRun -and -not $NoClaudeLogin) { Open-ClaudeLoginWindow }
+Write-Host 'INSTALL_DONE'
+Stop-Transcript | Out-Null
