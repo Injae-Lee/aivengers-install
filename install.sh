@@ -11,7 +11,7 @@
 #   저장소 초대가 와 있으면 로그인한 계정으로 수락한다(메일을 열지 않아도 됨).
 # 이 파일에는 비밀값·내부 주소를 넣지 않는다.
 #
-# 옵션(이 스크립트가 쓰는 것): --dir <clone 위치>(기본 ~/Aivengers-desktop), --branch <브랜치·태그>(기본 main),
+# 옵션(이 스크립트가 쓰는 것): --dir <clone 위치>(기본 ~/Aivengers-desktop), --branch <브랜치·태그>(기본: 최신 desktop-v* 태그, --channel main이면 main),
 #   --deploy-key(gh 대신 읽기 전용 deploy key로 받기), -h|--help. 나머지 옵션은 본체로 그대로 넘긴다
 #   (--docker, --install-docker, --no-claude-login, --port, --data-dir, --no-launch, --repair, --applications).
 #   --install-docker가 있으면 Homebrew가 없을 때 여기서 먼저 깐다(본체가 Colima·docker를 brew로 깖).
@@ -32,7 +32,8 @@ STATE_DIR="${AIVENGERS_STATE_DIR:-$HOME/.aivengers}"
 RUNTIME_DIR="$STATE_DIR/runtime"
 LOG_DIR="$STATE_DIR/logs"
 DIR="$HOME/Aivengers-desktop"
-BRANCH="main"
+# 받을 판: --branch를 주면 그것. 없으면 tag 채널(기본)은 최신 desktop-v* 태그, main 채널(--channel main 또는 지난 설치가 main)은 main(AIV-662)
+BRANCH=""
 USE_DEPLOY_KEY=0
 WANT_BREW=0
 PASS_ARGS=()
@@ -297,6 +298,25 @@ ensure_deploy_key() {
   GIT_URL="git@github.com:$REPO_SLUG.git"
 }
 
+# main 채널인지: 넘긴 --channel main, 아니면 지난 설치 기록(desktop.json)의 channel.
+want_main() {
+  local prev="" a
+  for a in ${PASS_ARGS[@]+"${PASS_ARGS[@]}"}; do
+    if [ "$prev" = --channel ]; then [ "$a" = main ] && return 0 || return 1; fi
+    case "$a" in --channel=main) return 0 ;; --channel=*) return 1 ;; esac
+    prev=$a
+  done
+  [ -f "$STATE_DIR/desktop.json" ] && grep -Eq '"channel": *"main"' "$STATE_DIR/desktop.json"
+}
+
+# 받을 판(브랜치 이름 또는 태그 이름). clone한 뒤(태그를 받은 뒤) 부른다.
+pick_ref() {
+  if [ -n "$BRANCH" ]; then echo "$BRANCH"; return 0; fi
+  if want_main; then echo main; return 0; fi
+  local t; t=$(git -C "$DIR" tag -l 'desktop-v*' --sort=-v:refname | head -n 1)
+  echo "${t:-main}"
+}
+
 clone_or_update() {
   if [ -d "$DIR/.git" ]; then
     local url; url=$(git -C "$DIR" remote get-url origin 2>/dev/null || true)
@@ -309,14 +329,26 @@ clone_or_update() {
     if [ -n "$(git -C "$DIR" status --porcelain --untracked-files=no)" ]; then
       die "${DIR}에 고친 파일이 있어 갱신하지 않습니다. 그 변경을 정리한 뒤 다시 실행하세요"
     fi
-    say "저장소 갱신: $DIR ($BRANCH)"
-    git -C "$DIR" fetch --tags origin
-    git -C "$DIR" checkout -q "$BRANCH"
-    if git -C "$DIR" symbolic-ref -q HEAD >/dev/null; then git -C "$DIR" pull -q --ff-only origin "$BRANCH"; fi
+    git -C "$DIR" fetch -q --tags origin
+    local ref; ref=$(pick_ref)
+    # 태그를 고른 기존 설치가 그 태그보다 앞선 판이면(태그가 생기기 전 main으로 설치) 내려가지 않는다.
+    if [ "${ref#desktop-v}" != "$ref" ] && [ "$(git -C "$DIR" rev-parse HEAD)" != "$(git -C "$DIR" rev-parse "$ref^{commit}")" ] \
+      && git -C "$DIR" merge-base --is-ancestor "$ref" HEAD 2>/dev/null; then
+      say "저장소 그대로: $DIR (지금 판이 ${ref}보다 앞섬)"
+    else
+      say "저장소 갱신: $DIR ($ref)"
+      git -C "$DIR" checkout -q "$ref"
+      if git -C "$DIR" symbolic-ref -q HEAD >/dev/null; then git -C "$DIR" pull -q --ff-only origin "$ref"; fi
+    fi
   else
     [ -e "$DIR" ] && [ -n "$(ls -A "$DIR" 2>/dev/null)" ] && die "${DIR}가 비어 있지 않은 폴더입니다. --dir로 다른 위치를 고르세요"
     say "저장소 받기: $DIR"
-    git clone -q --branch "$BRANCH" "$GIT_URL" "$DIR"
+    git clone -q --branch "${BRANCH:-main}" "$GIT_URL" "$DIR"
+    local ref; ref=$(pick_ref)
+    if [ "$ref" != "${BRANCH:-main}" ]; then
+      say "판: $ref"
+      git -C "$DIR" checkout -q "$ref"
+    fi
   fi
   say "커밋: $(git -C "$DIR" log -1 --format='%h %s')"
 }
