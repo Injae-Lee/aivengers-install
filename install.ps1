@@ -24,6 +24,12 @@
   배포판이 없으면 '--no-launch --web-download'로 깔고, 첫 실행 질문 없이 Windows 사용자 이름으로 사용자를 만들어 기본 사용자로 둔다.
   끝나면 Claude 로그인 터미널 창을 띄운다(이미 로그인돼 있으면 건너뜀). 기록: %LOCALAPPDATA%\Aivengers\logs\install-*.log
 
+  다시 설치·업그레이드(AIV-694): 이미 설치된 Windows에서도 같은 명령을 그대로 다시 돌린다. -Distro를 주지 않으면 설치 때 쓴 배포판
+  (desktop.json의 dataDir·repoDir, 없으면 prod.env가 있는 배포판)을 찾아 쓰고, 있는 prod.env의 포트(AIV_PORT)로 확인한다.
+  데이터·설정·토큰·Claude 로그인은 그대로 두고 저장소만 fast-forward해 다시 배포한다. 사본에 바뀐 파일이 있으면 받지 않고
+  'REPO_DIRTY'와 목록·git stash 명령을 찍고 멈춘다(종료 코드 1, WSL 안 6). gh 로그인이 없는 배포판(-DeployKey 설치)은 앱을 받지 못해
+  할 일과 함께 'APP_NOT_INSTALLED'를 찍는다.
+
   사람 손 단계(화면 승인뿐): UAC '예'(WSL을 처음 켤 때), 재부팅(WSL 기능이 처음 켜질 때만), GitHub 기기 코드 승인(또는 deploy key 등록),
   Claude 로그인 브라우저 승인, Slack 토큰(웹 설정).
 
@@ -118,11 +124,56 @@ function Invoke-InDistro([string]$Script, [switch]$AsRoot) {
   return $LASTEXITCODE
 }
 
-# 배포판 안 bash 스크립트의 표준 출력(줄 목록)을 받는다(기본 사용자).
-function Get-InDistroLine([string]$Script) {
+# 배포판 안 bash 스크립트의 표준 출력(줄 목록)을 받는다(기본 사용자). -Name을 빼면 $Distro.
+function Get-InDistroLine([string]$Script, [string]$Name = '') {
+  if (-not $Name) { $Name = $Distro }
   $bytes = [System.Text.Encoding]::UTF8.GetBytes(($Script -replace "`r`n", "`n"))
   $b64 = [System.Convert]::ToBase64String($bytes)
-  return Get-WslLine @('-d', $Distro, '--', 'bash', '-c', "echo $b64 | base64 -d | bash")
+  return Get-WslLine @('-d', $Name, '--', 'bash', '-c', "echo $b64 | base64 -d | bash")
+}
+
+# 다시 설치·업그레이드(AIV-694): -Distro를 주지 않았을 때 이미 설치된 배포판을 찾는다. 못 찾으면 $null.
+# ① desktop.json의 dataDir·repoDir(\\wsl.localhost\<배포판>\… 또는 \\wsl$\<배포판>\…)에 적힌 배포판이 있으면 그것(-ConfigOnly면 있는지 보지 않음)
+# ② 기본 배포판($Distro)이 없으면 설정(~/.config/aivengers/prod.env)이 있는 배포판(docker-desktop* 제외)
+# 돌려주는 값: @{ name; from }
+$ProdEnvProbe = 'f="${XDG_CONFIG_HOME:-$HOME/.config}/aivengers/prod.env"; [ -f "$f" ] && echo yes || true'
+function Find-InstalledDistro([string[]]$Names, [switch]$ConfigOnly) {
+  $cfg = Join-Path $AppDir 'desktop.json'
+  if (Test-Path -LiteralPath $cfg -PathType Leaf) {
+    try {
+      $c = Get-Content -LiteralPath $cfg -Raw -Encoding UTF8 | ConvertFrom-Json
+      foreach ($k in @('dataDir', 'repoDir')) {
+        if (-not $c.PSObject.Properties[$k]) { continue }
+        if ([string]$c.$k -match '^\\\\wsl(?:\.localhost|\$)\\([^\\]+)\\') {
+          $n = $Matches[1]
+          if ($ConfigOnly -or ($Names -contains $n)) { return @{ name = $n; from = 'desktop.json' } }
+        }
+      }
+    } catch { Write-Step "desktop.json을 읽지 못해 배포판을 거기서 찾지 않습니다($($_.Exception.Message))" }
+  }
+  if ($ConfigOnly -or ($Names -contains $Distro)) { return $null }
+  foreach ($n in $Names) {
+    if ($n -like 'docker-desktop*') { continue }
+    if ((@(Get-InDistroLine $ProdEnvProbe -Name $n)) -contains 'yes') { return @{ name = $n; from = 'prod.env' } }
+  }
+  return $null
+}
+# $Distro에 설정(prod.env)이 있으면 서버 포트(AIV_PORT, 없거나 이상하면 compose 기본 45180), 없으면 0.
+function Get-InstalledPort {
+  $lines = @(Get-InDistroLine 'f="${XDG_CONFIG_HOME:-$HOME/.config}/aivengers/prod.env"; if [ -f "$f" ]; then echo prod.env; sed -n "s/^AIV_PORT=//p" "$f" | tail -n 1; fi')
+  if ($lines.Count -lt 1 -or $lines[0] -ne 'prod.env') { return 0 }
+  $p = 0
+  if ($lines.Count -ge 2 -and [int]::TryParse($lines[1], [ref]$p) -and $p -ge 1024 -and $p -le 65535) { return $p }
+  return 45180
+}
+# -Distro·AIVENGERS_WSL_DISTRO를 주지 않았으면 찾은 배포판으로 바꾼다.
+function Use-InstalledDistro([string[]]$Names, [switch]$ConfigOnly) {
+  if ($BoundArgs.ContainsKey('Distro') -or $env:AIVENGERS_WSL_DISTRO) { return }
+  $found = Find-InstalledDistro $Names -ConfigOnly:$ConfigOnly
+  if ($found -and $found.name -ne $script:Distro) {
+    Write-Step "이미 설치된 배포판 $($found.name) 를 씁니다($($found.from)에서 찾음, 기본 $($script:Distro) 대신)"
+    $script:Distro = $found.name
+  }
 }
 
 # bash 작은따옴표 문자열로 감싼다.
@@ -300,8 +351,13 @@ function Invoke-DesktopAppInstall([string]$InstallDir) {
       $zip = Join-Path $dl $AppAsset
       $tagFile = Join-Path $dl 'release.txt'
       if (Test-Path -LiteralPath $tagFile) { $tag = (Get-Content -LiteralPath $tagFile -Raw).Trim() }
+    } elseif ($code -eq 3) {
+      # 예전에 -DeployKey로 설치한 배포판은 gh 로그인이 없다(저장소는 deploy key로 받음). 릴리스는 gh로만 받는다(AIV-694).
+      Write-Host "주의: 배포판 $Distro 안 gh가 GitHub에 로그인돼 있지 않아 접속 앱을 받지 못했습니다(예전에 -DeployKey로 설치했으면 gh 로그인이 없습니다). 서버는 그대로 쓸 수 있습니다(브라우저 http://127.0.0.1:$Port)" -ForegroundColor Yellow
+      Write-Host "  앱을 더 깔려면(서버 단계 없이 앱만): ① 저장소에 초대된 GitHub 계정이 있으면 wsl -d $Distro -- bash -c `"GH_BROWSER=true gh auth login -h github.com --web --git-protocol https </dev/null`" 로 로그인(8자리 코드 승인)한 뒤 이 설치기를 -AppOnly로 다시 ② 없으면 저장소 주인에게 릴리스의 $AppAsset 과 $AppAsset.sha256 을 받아 같은 폴더에 두고 -AppOnly -AppZip <zip 경로>" -ForegroundColor Yellow
+      Write-Host 'APP_NOT_INSTALLED'
     } else {
-      Write-Host "주의: 접속 앱을 받지 못했습니다(종료 코드 $code). 서버는 설치됐고 브라우저로 쓸 수 있습니다. 릴리스 zip을 받아 '-AppZip <zip 경로>'로 다시 돌리면 앱만 더 깝니다" -ForegroundColor Yellow
+      Write-Host "주의: 접속 앱을 받지 못했습니다(종료 코드 $code). 서버는 설치됐고 브라우저로 쓸 수 있습니다. 릴리스 zip을 받아 '-AppOnly -AppZip <zip 경로>'로 다시 돌리면 앱만 더 깝니다" -ForegroundColor Yellow
       Write-Host 'APP_NOT_INSTALLED'
     }
   }
@@ -458,6 +514,7 @@ if ($Resume) { Write-Step '재부팅 뒤 설치를 이어 갑니다' }
 if ($AppOnly) {
   if ($NoApp) { Exit-Install '-AppOnly와 -NoApp은 함께 쓸 수 없습니다' }
   Write-Step '접속 앱만 바꿉니다(-AppOnly): WSL·GitHub·서버 단계는 건너뜀'
+  Use-InstalledDistro @() -ConfigOnly
   $cfgFile = Join-Path $AppDir 'desktop.json'
   $have = ''
   if (Test-Path -LiteralPath $cfgFile -PathType Leaf) {
@@ -526,6 +583,8 @@ if (-not (Test-WslReady)) {
 }
 
 $distros = Get-WslLine @('-l', '-q')
+# 이미 설치된 Windows(AIV-694): 설치 때 쓴 배포판을 그대로 쓴다(새 배포판을 깔지 않음).
+Use-InstalledDistro $distros
 if ($distros -notcontains $Distro) {
   if ($DryRun) { Write-Step "(dry-run) wsl --install -d $Distro --no-launch --web-download → 사용자 만들기" }
   else {
@@ -600,6 +659,15 @@ if ($wslUser -eq 'root') {
   }
 }
 Write-Step "WSL 사용자 $wslUser"
+
+# 이미 설치된 Windows(AIV-694): 설정(prod.env)이 있으면 그대로 두고 그 포트로 서버가 뜬다. 응답 확인·브라우저도 그 포트로 한다.
+# (WSL 안 설치기도 같은 규칙: 있는 prod.env의 AIV_PORT가 --port보다 먼저.)
+$oldPort = Get-InstalledPort
+if ($oldPort -gt 0) {
+  if ($BoundArgs.ContainsKey('Port') -and $Port -ne $oldPort) { Write-Step "주의: -Port $Port 대신 있는 설정의 포트 $oldPort 를 씁니다(prod.env AIV_PORT. 바꾸려면 그 파일을 고침)" }
+  $Port = $oldPort
+  Write-Step "기존 설치 있음(배포판 $Distro, 포트 $Port): 데이터·설정은 그대로 두고 새 판으로 올립니다"
+}
 
 $wslCa = ''
 if (-not $CaFile -and -not $NoWindowsCa) {
@@ -746,10 +814,26 @@ else
 fi
 
 if [ -d "$SRC/.git" ]; then
+  # 이미 설치된 사본(AIV-694): 바뀐 파일이 있으면 받지 않고 무엇이 바뀌었는지와 남겨 둔 채 치우는 명령을 알린다(scripts/lib/repo-clean.sh와 같은 문구).
+  dirty=$(git -C "$SRC" status --porcelain 2>/dev/null || true)
+  if [ -n "$dirty" ]; then
+    {
+      echo "실패: $SRC 에 바뀐 파일이 있습니다. 깨끗한 checkout에서만 배포합니다(설치기가 받은 사본이라 손으로 고치지 않는 자리)"
+      echo "REPO_DIRTY: $SRC"
+      echo "바뀐 파일(앞 20줄):"
+      printf '%s\n' "$dirty" | head -n 20 | sed 's/^/  /'
+      echo "바뀐 것을 남겨 둔 채 치우고 같은 명령을 다시 돌리세요(되돌리기: git -C '$SRC' stash pop):"
+      echo "  git -C '$SRC' stash push -u -m aivengers-install"
+    } >&2
+    exit 6
+  fi
   echo "==> 저장소 받기: $SRC"
   git -C "$SRC" fetch -q origin "$BRANCH"
   git -C "$SRC" checkout -q "$BRANCH"
-  git -C "$SRC" merge --ff-only -q "origin/$BRANCH"
+  git -C "$SRC" merge --ff-only -q "origin/$BRANCH" || {
+    echo "실패: $SRC 를 origin/$BRANCH 로 fast-forward하지 못했습니다(사본에 origin에 없는 커밋이 있음). 확인: git -C '$SRC' log --oneline origin/$BRANCH..HEAD" >&2
+    exit 1
+  }
 else
   echo "==> 저장소 받기(처음): $SRC"
   mkdir -p "$(dirname "$SRC")"
@@ -773,6 +857,7 @@ $install = $install.Replace('__ARGS__', (($installArgs | ForEach-Object { Conver
 Write-Step 'WSL 안에서 GitHub 인증 → 저장소 받기 → 설치기(비밀번호를 묻지 않음, GitHub 승인은 기다림)'
 $code = Invoke-InDistro $install
 if ($code -eq 2) { Exit-Install 'deploy key를 저장소에 넣은 뒤 같은 명령을 다시 돌리세요(공개 키는 위 출력)' }
+if ($code -eq 6) { Exit-Install "WSL 안 저장소 사본에 바뀐 파일이 있어 멈췄습니다(데이터·설정·서버는 그대로). 위 'REPO_DIRTY' 아래 목록을 보고, 안내한 git stash 명령으로 치운 뒤 같은 명령을 다시 돌리세요" }
 if ($code -ne 0) { Exit-Install "WSL 안 설치기가 실패했습니다(종료 코드 $code). 위 출력을 확인하세요" }
 
 # ---- 6 접속 앱 설치(AIV-668) ----
@@ -816,6 +901,8 @@ if ($appExe) {
   Write-Step "끝. 접속 앱을 엽니다: $appExe"
   Start-Process -FilePath $appExe
   Write-Host 'APP_STARTED'
+  # 접속 앱은 늘 127.0.0.1:45180에 붙는다(apps/desktop config.ts CLIENT_PORT). 다른 포트 설치는 브라우저로 쓴다.
+  if ($Port -ne 45180) { Write-Step "주의: 접속 앱은 포트 45180에만 붙습니다. 이 설치는 포트 $Port 라 브라우저 $url 을 쓰세요" }
 } else {
   Write-Step "끝. 브라우저: $url"
   if (-not $DryRun -and -not $NoBrowser) { Start-Process $url }
