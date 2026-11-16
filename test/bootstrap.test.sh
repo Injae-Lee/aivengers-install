@@ -89,6 +89,25 @@ check '[ "$RC" -ne 0 ] && grep -q "비어 있지 않은 폴더" "$T/out"' "비�
 run --dir '~/Aivengers-desktop'
 check '[ "$RC" -eq 0 ] && grep -q "^--dir$" "$T/body-args" && grep -q "^$H/Aivengers-desktop$" "$T/body-args"' "따옴표 친 ~ 펼침"
 
+# tag 채널(AIV-662): --branch가 없으면 새 clone은 최신 desktop-v* 태그를 받는다. --channel main이면 main. 앞선 판은 내려가지 않음
+git -C "$T/src" -c user.email=t@t -c user.name=t tag -a desktop-v0.1.0 -m t HEAD
+TAG1=$(git -C "$T/src" rev-parse HEAD)
+echo m >"$T/src/main-ahead.txt"
+git -C "$T/src" -c user.email=t@t -c user.name=t add -A
+git -C "$T/src" -c user.email=t@t -c user.name=t commit -qm ahead
+git -C "$T/src" push -q "$T/remote.git" main --tags
+run --dir "$H/tagged"
+check '[ "$RC" -eq 0 ] && [ "$(git -C "$H/tagged" rev-parse HEAD)" = "$TAG1" ] && [ ! -f "$H/tagged/main-ahead.txt" ]' "새 clone은 최신 desktop-v* 태그를 받음(main이 앞서도)"
+run --dir "$H/mainch" --channel main
+check '[ "$RC" -eq 0 ] && [ -f "$H/mainch/main-ahead.txt" ] && grep -q "^--channel$" "$T/body-args"' "--channel main이면 main(옵션은 본체로)"
+run --dir "$H/mainch"
+check '[ "$RC" -eq 0 ] && [ -f "$H/mainch/main-ahead.txt" ] && grep -q "지금 판이 desktop-v0.1.0보다 앞섬" "$T/out"' "다시 실행: 지금 판(main)이 태그보다 앞서면 내려가지 않음"
+git -C "$T/src" -c user.email=t@t -c user.name=t tag -a desktop-v0.2.0 -m t HEAD
+TAG2=$(git -C "$T/src" rev-parse HEAD)
+git -C "$T/src" push -q "$T/remote.git" --tags
+run --dir "$H/tagged"
+check '[ "$RC" -eq 0 ] && [ "$(git -C "$H/tagged" rev-parse HEAD)" = "$TAG2" ]' "다시 실행: 새 태그가 나오면 그 태그로"
+
 # --install-docker이고 Homebrew가 없으면 공식 스크립트를 NONINTERACTIVE로 돌린다. 터미널이 없으면 비밀번호 창(SUDO_ASKPASS)(AIV-660)
 HB=$T/homebrew
 cat >"$T/brew-install.sh" <<EOF

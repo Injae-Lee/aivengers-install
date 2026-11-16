@@ -130,7 +130,7 @@ curl -fsSL https://raw.githubusercontent.com/Injae-Lee/aivengers-install/main/in
 ## 옵션
 
 - `--dir <경로>`: clone 위치(기본 `~/Aivengers-desktop`)
-- `--branch <이름>`: 브랜치·태그(기본 `main`)
+- `--branch <이름>`: 브랜치·태그(기본: 최신 `desktop-v*` 태그. `--channel main`이거나 지난 설치가 main 채널이면 `main`, 태그가 없으면 `main`). 지금 판이 최신 태그보다 앞서면 내려가지 않음
 - `--deploy-key`: gh 대신 읽기 전용 deploy key. 처음에는 공개 키를 보여 주고 멈춥니다
 - 나머지(`--docker`, `--install-docker`, `--no-claude-login`, `--no-login-item`, `--port`, `--data-dir`, `--no-launch`, `--repair`, `--applications`)는 본체로 넘깁니다
 
