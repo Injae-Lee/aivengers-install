@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # mirror 워크플로가 sync 커밋 뒤에 부른다(워크플로 토큰의 push는 이 워크플로를 깨우지 않는다).
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -21,6 +23,11 @@ jobs:
         run: shellcheck install.sh test/bootstrap.test.sh
       - name: test
         run: sh test/bootstrap.test.sh
+      # 본체 사본(mirror.sha256에 적힌 파일)은 여기서 손으로 고치지 않는다. 본체를 고치면 mirror 워크플로가 맞춘다.
+      - name: 본체 사본이 mirror.sha256과 같은지
+        run: |
+          if [ ! -f mirror.sha256 ]; then echo "mirror.sha256 없음(첫 동기화 전)"; exit 0; fi
+          sha256sum -c mirror.sha256 || { echo "::error::본체 사본을 이 저장소에서 고쳤습니다. 본체 저장소에서 고치세요(mirror 워크플로가 맞춥니다)"; exit 1; }
 
   # Windows 설치기(install.ps1): 정적 검사, Windows PowerShell 5.1 파서, BOM, WSL 배포판이 없으면 안내로 멈추는지.
   windows:

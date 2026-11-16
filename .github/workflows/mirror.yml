@@ -1,0 +1,92 @@
+# 본체 저장소의 사본(install.ps1)을 본체 main에 맞춘다. 절차는 본체 저장소 docs/install-mirror.md.
+# - 15분마다 본체 main의 scripts/ 폴더만 읽기 전용 deploy key(비밀 MIRROR_SOURCE_KEY)로 받아 scripts/install-mirror.sh sync를 돌린다
+#   (사본 목록·guard·커밋 글은 그 스크립트가 정한다. 같으면 아무것도 하지 않는다)
+# - 수동(workflow_dispatch): sync(기본), check(어긋나면 실패만, 쓰지 않음), dry-run(무엇이 바뀔지만)
+# - sync 커밋 뒤 check 워크플로를 직접 부른다(워크플로 토큰의 push는 다른 워크플로를 깨우지 않는다)
+# - PR로는 돌지 않는다. 받은 본체 파일의 내용은 로그에 찍지 않는다(이 저장소의 로그는 누구나 본다)
+name: mirror
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: sync = 사본을 맞춰 push, check = 어긋나면 실패만(쓰지 않음), dry-run = 무엇이 바뀔지만
+        type: choice
+        options: [sync, check, dry-run]
+        default: sync
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: github.repository == 'Injae-Lee/aivengers-install'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      SOURCE_REPO: Injae-Lee/Aivengers
+      MODE: ${{ github.event.inputs.mode || 'sync' }}
+      INSTALL_MIRROR_DENY: ${{ secrets.INSTALL_MIRROR_DENY }}
+    steps:
+      - name: 본체 scripts/ 받기(읽기 전용 키)
+        env:
+          SOURCE_KEY: ${{ secrets.MIRROR_SOURCE_KEY }}
+        run: |
+          if [ -z "$SOURCE_KEY" ]; then
+            echo "::error::비밀 MIRROR_SOURCE_KEY가 없습니다. 본체 저장소 docs/install-mirror.md '키 등록'을 따르세요"
+            exit 1
+          fi
+          umask 077
+          mkdir -p "$RUNNER_TEMP/ssh"
+          trap 'rm -rf "$RUNNER_TEMP/ssh"' EXIT
+          printf '%s\n' "$SOURCE_KEY" > "$RUNNER_TEMP/ssh/key"
+          # GitHub이 공개한 github.com 호스트 키(ed25519). 바뀌면 이 줄을 고친다.
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$RUNNER_TEMP/ssh/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/ssh/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/ssh/known_hosts -o StrictHostKeyChecking=yes"
+          git clone -q --depth 1 --filter=blob:none --sparse "git@github.com:${SOURCE_REPO}.git" "$RUNNER_TEMP/src"
+          git -C "$RUNNER_TEMP/src" sparse-checkout set scripts
+          echo "본체 커밋: $(git -C "$RUNNER_TEMP/src" rev-parse --short=12 HEAD)"
+
+      - name: 사본 목록·guard
+        run: |
+          bash "$RUNNER_TEMP/src/scripts/install-mirror.sh" list
+          bash "$RUNNER_TEMP/src/scripts/install-mirror.sh" guard
+
+      - name: check(읽기만 함)
+        if: env.MODE == 'check'
+        run: |
+          git clone -q --depth 1 "https://github.com/${GITHUB_REPOSITORY}.git" "$RUNNER_TEMP/public"
+          bash "$RUNNER_TEMP/src/scripts/install-mirror.sh" check "$RUNNER_TEMP/public"
+
+      - name: sync
+        if: env.MODE != 'check'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 이 저장소에 push할 때만 쓰는 워크플로 토큰(이 job 안에서만 유효)
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git config --global "http.https://github.com/${GITHUB_REPOSITORY}.git.extraheader" "AUTHORIZATION: basic $auth"
+          url="https://github.com/${GITHUB_REPOSITORY}.git"
+          if [ "$MODE" = dry-run ]; then
+            bash "$RUNNER_TEMP/src/scripts/install-mirror.sh" sync "$url" --dry-run
+            exit 0
+          fi
+          bash "$RUNNER_TEMP/src/scripts/install-mirror.sh" sync "$url" | tee "$RUNNER_TEMP/sync.out"
+          if grep -q '^SYNCED ' "$RUNNER_TEMP/sync.out"; then
+            gh workflow run check.yml --repo "$GITHUB_REPOSITORY" --ref main
+            echo "check 워크플로를 불렀습니다"
+          fi
+
+      - name: 정리
+        if: always()
+        run: |
+          git config --global --unset-all "http.https://github.com/${GITHUB_REPOSITORY}.git.extraheader" || true
+          rm -rf "$RUNNER_TEMP/src" "$RUNNER_TEMP/ssh"
