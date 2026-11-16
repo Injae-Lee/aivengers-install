@@ -271,6 +271,32 @@ function Stop-DesktopApp {
   }
 }
 
+# 실행기 판(AIV-714). 실행기는 의존성 없이 저장소 사본의 packages/host-runner만 읽으므로 그 폴더의 git tree 해시를 판으로 본다.
+# 실행기를 켜지 않았거나(desktop.json hostRunner) 저장소 자리·git을 읽지 못하면 빈 값(그때는 견주지 않는다).
+function Get-HostRunnerTree([string]$ConfigFile) {
+  if (-not (Test-Path -LiteralPath $ConfigFile -PathType Leaf)) { return '' }
+  $repo = ''
+  try {
+    $c = Get-Content -LiteralPath $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $c.PSObject.Properties['hostRunner'] -or $c.hostRunner -ne $true) { return '' }
+    if ($c.PSObject.Properties['repoDir'] -and [string]$c.repoDir -match '^\\\\wsl(?:\.localhost|\$)\\[^\\]+(\\.+?)\\*$') { $repo = ($Matches[1] -replace '\\', '/') }
+  } catch { return '' }
+  if (-not $repo) { return '' }
+  $line = Get-InDistroLine "git -C $(ConvertTo-BashQuoted $repo) rev-parse HEAD:packages/host-runner 2>/dev/null || true" | Select-Object -First 1
+  if ("$line" -match '^[0-9a-f]{40}$') { return "$line" }
+  return ''
+}
+# 앱을 마지막으로 연(실행기를 새로 띄운) 때의 실행기 판. 기록이 없으면 빈 값(이 기능 전 설치: 다음 업데이트에서 한 번 다시 연다).
+function Get-HostRunnerSeen {
+  $f = Join-Path $AppDir 'host-runner-tree.txt'
+  if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { return '' }
+  try { return ([string](Get-Content -LiteralPath $f -Raw -Encoding UTF8)).Trim() } catch { return '' }
+}
+function Set-HostRunnerSeen([string]$Tree) {
+  New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $AppDir 'host-runner-tree.txt'), "$Tree`n", (New-Object System.Text.UTF8Encoding($false)))
+}
+
 # zip(옆에 .sha256이 있으면 해시 확인)을 풀어 $Dest에 깐다. 새 폴더에 푼 뒤 바꿔 끼워 반쯤 깔린 앱이 남지 않게 한다.
 # 돌려주는 값: exe 경로.
 function Install-DesktopApp([string]$Zip, [string]$Dest) {
@@ -510,7 +536,7 @@ if ($Resume) { Write-Step '재부팅 뒤 설치를 이어 갑니다' }
 
 # ---- 앱만 바꾸기(-AppOnly, AIV-671) ----
 # 업데이트 버튼(scripts/update-windows.ps1)이 서버를 새 판으로 배포한 뒤 부른다. WSL·GitHub·서버 단계는 이미 돼 있다고 보고 건너뛴다.
-# 이미 최신 릴리스(desktop.json appRelease)면 앱을 끄지 않는다. 실패하면 '실패:'와 종료 코드 1(Exit-Install).
+# 이미 최신 릴리스(desktop.json appRelease)면 앱을 바꾸지 않는다. 다만 실행기 코드가 바뀌었으면 앱을 다시 연다(AIV-714). 실패하면 '실패:'와 종료 코드 1(Exit-Install).
 if ($AppOnly) {
   if ($NoApp) { Exit-Install '-AppOnly와 -NoApp은 함께 쓸 수 없습니다' }
   Write-Step '접속 앱만 바꿉니다(-AppOnly): WSL·GitHub·서버 단계는 건너뜀'
@@ -525,7 +551,27 @@ if ($AppOnly) {
     $slug = Get-RepoSlug
     if ($slug) { $want = Get-InDistroLine "gh release view --repo $(ConvertTo-BashQuoted $slug) --json tagName -q .tagName 2>/dev/null || true" | Select-Object -First 1 }
   }
+  # 실행기 코드(AIV-714): 앱이 띄운 실행기는 저장소 사본의 packages/host-runner를 읽어 돈다. 서버 업데이트가 그 코드를 바꿔도
+  # 앱 릴리스가 같으면 앱을 끄지 않아 옛 실행기가 계속 돈다. 그래서 지금 사본의 실행기 판과 앱이 마지막으로 열릴 때의 판을 견준다.
+  $runnerTree = Get-HostRunnerTree $cfgFile
+  $runnerSeen = Get-HostRunnerSeen
   if (-not $AppZip -and $want -and $have -eq $want -and (Test-Path -LiteralPath (Join-Path $appInstallDir $AppExeName))) {
+    $exe = Join-Path $appInstallDir $AppExeName
+    if ($runnerTree -and $runnerTree -ne $runnerSeen) {
+      if ($DryRun) {
+        Write-Step "(dry-run) 접속 앱은 최신 릴리스($have)지만 실행기 코드가 바뀌어 앱을 다시 엽니다"
+      } else {
+        Write-Step "접속 앱은 최신 릴리스($have)지만 실행기 코드가 바뀌었습니다($(if ($runnerSeen) { $runnerSeen.Substring(0, 12) } else { '기록 없음' }) → $($runnerTree.Substring(0, 12))). 새 실행기로 돌게 앱을 다시 엽니다"
+        Stop-DesktopApp
+        Start-Process -FilePath $exe
+        Set-HostRunnerSeen $runnerTree
+        Write-Host 'APP_RESTARTED_FOR_RUNNER'
+        Write-Host 'APP_STARTED'
+      }
+      Write-Host 'INSTALL_DONE'
+      Stop-Transcript | Out-Null
+      exit 0
+    }
     Write-Step "접속 앱이 이미 최신 릴리스입니다($have). 그대로 둡니다"
     Write-Host 'APP_UP_TO_DATE'
     Write-Host 'INSTALL_DONE'
@@ -543,6 +589,7 @@ if ($AppOnly) {
   if (Test-Path -LiteralPath $cfgFile -PathType Leaf) { Write-DesktopConfig $cfgFile @{ appDir = $appInstallDir; appRelease = $r.tag } }
   Write-Step "접속 앱을 엽니다: $($r.exe) ($($r.tag))"
   Start-Process -FilePath $r.exe
+  if ($runnerTree) { Set-HostRunnerSeen $runnerTree }
   Write-Host 'APP_STARTED'
   Write-Host 'INSTALL_DONE'
   Stop-Transcript | Out-Null
@@ -900,6 +947,9 @@ if ($appExe) {
   # 앱을 연다. 서버에 붙으면 앱이 로그인할 때 열기(감시자)를 등록하고 실행기를 띄운다.
   Write-Step "끝. 접속 앱을 엽니다: $appExe"
   Start-Process -FilePath $appExe
+  # 지금 사본의 실행기 판을 남긴다(AIV-714). 다음 업데이트가 실행기 코드가 바뀌었는지 이 값과 견준다.
+  $runnerTree = Get-HostRunnerTree $cfgFile
+  if ($runnerTree) { Set-HostRunnerSeen $runnerTree }
   Write-Host 'APP_STARTED'
   # 접속 앱은 늘 127.0.0.1:45180에 붙는다(apps/desktop config.ts CLIENT_PORT). 다른 포트 설치는 브라우저로 쓴다.
   if ($Port -ne 45180) { Write-Step "주의: 접속 앱은 포트 45180에만 붙습니다. 이 설치는 포트 $Port 라 브라우저 $url 을 쓰세요" }
