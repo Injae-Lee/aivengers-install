@@ -81,8 +81,12 @@ jobs:
           fi
           bash "$RUNNER_TEMP/src/scripts/install-mirror.sh" sync "$url" | tee "$RUNNER_TEMP/sync.out"
           if grep -q '^SYNCED ' "$RUNNER_TEMP/sync.out"; then
-            gh workflow run check.yml --repo "$GITHUB_REPOSITORY" --ref main
-            echo "check 워크플로를 불렀습니다"
+            # check가 꺼져 있으면 부르지 못한다. 동기화는 끝났으므로 경고만 남긴다.
+            if gh workflow run check.yml --repo "$GITHUB_REPOSITORY" --ref main; then
+              echo "check 워크플로를 불렀습니다"
+            else
+              echo "::warning::check 워크플로를 부르지 못했습니다(꺼져 있으면 켠 뒤 gh workflow run check.yml)"
+            fi
           fi
 
       - name: 정리
