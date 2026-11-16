@@ -7,6 +7,7 @@ Aivengers Desktop 부트스트랩 설치기. 초대받은 사람만 쓸 수 있�
 - 터미널에서 한 줄을 실행하면 전제 조건을 갖추고 비공개 저장소를 받은 뒤, 저장소 안의 설치기 본체로 넘깁니다.
 - 지원: macOS(Apple Silicon) `install.sh`, Windows(WSL2) `install.ps1`
 - 에이전트(Claude Code)에 한 줄만 주고 설치: 아래 'Mac(에이전트용)'·'Windows(에이전트용)'
+- 설치 뒤 따로 세팅할 것은 없습니다. 사람 손이 남는 것은 직군 템플릿 고르기와 Honcho 추론용 API 키(선택)뿐입니다: 아래 '설치 뒤'
 
 ## Mac
 
@@ -52,6 +53,7 @@ https://github.com/Injae-Lee/aivengers-install 의 README 'Mac(에이전트용)'
    - `ls -d ~/Applications/"Aivengers Desktop.app"` → 있음
    - `DOCKER_CONTEXT=colima /opt/homebrew/bin/docker exec aivengers-server-1 claude auth status` → `"loggedIn": true`
 5. 사람이 나중에 상태를 물으면 `~/.aivengers/logs`의 가장 새 `install-*.log`(없으면 `bootstrap-*.log`) 끝 30줄을 읽어 알려 줍니다
+6. 4번 표를 보고한 뒤 아래 '설치 뒤' 절의 '사람 손이 남는 것' 표를 사람에게 그대로 전합니다. 봇·팀·설정을 대신 바꾸지 않습니다
 
 - 멈출 조건: 0 아닌 종료 코드이거나 `실패:`가 찍히면 고치려 하지 말고 마지막 30줄과 함께 멈춥니다(같은 명령을 다시 돌리면 이어 감)
 - 금지: 비밀번호를 묻거나 대신 넣기(`sudo`를 직접 돌리지 않음), 토큰·키 파일 내용 출력(`~/.config/gh/hosts.yml`, `deploy-token`, `.credentials.json`, `deploy_key`), Docker Desktop 설치, 설치기 밖에서 Homebrew·Colima 따로 설치
@@ -129,9 +131,28 @@ https://github.com/Injae-Lee/aivengers-install 의 README 'Windows(에이전트�
    - `curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:<포트>/api/auth/me` → `200`
    - `curl.exe -s -o NUL -w "%{http_code}" http://localhost:<포트>/api/auth/me` → `200`
    - `wsl -d <배포판> -- ls -ln ~/.local/share/aivengers/data` → 소유자 `1000 1000`, `deploy-token`이 `-rw-------`
+6. 5번 표를 보고한 뒤 아래 '설치 뒤' 절의 '사람 손이 남는 것' 표를 사람에게 그대로 전합니다. 봇·팀·설정을 대신 바꾸지 않습니다
 
 - 멈출 조건: 3010이 아닌 0 아닌 종료 코드이거나 `실패:`가 찍히면 고치려 하지 말고 마지막 30줄과 함께 멈춥니다(`REPO_DIRTY`는 위 2번대로 묻고 이어 감)
 - 금지: 토큰·키 파일 내용 출력(`~/.config/gh/hosts.yml`, `deploy-token`, `.credentials.json`, `deploy_key`), 관리자 PowerShell을 따로 열라고 하기(설치기가 UAC로 요청), 사람 동의 없이 재부팅, Docker Desktop 설치, `C:` 아래로 데이터 옮기기, 이미 있는 설치 지우기·새로 만들기(`wsl --unregister`, 데이터·설정 폴더 지우기, 배포판 새로 설치), 사본의 바뀐 파일 지우기(`git reset`·`git checkout --`·`git clean`)
+
+## 설치 뒤
+
+- 따로 세팅할 것이 없습니다. 설치가 끝나면 아래가 이미 갖춰져 있습니다
+  - 매니저 봇 `manager`: 웹 홈(`http://127.0.0.1:45180`)이나 접속 앱에서 바로 말을 걸면 됩니다
+  - 기본 메모리·스킬: 일하는 방식의 출발점. 화면에 '기본' 배지로 보이고, 고치거나 지워도 됩니다(고친 것은 업데이트가 덮어쓰지 않음)
+  - 학습·정리 기능: 봇이 쓰면서 배운 것을 메모리·스킬로 남기고 정리하는 기능이 기본으로 켜져 있습니다
+- 설치한 판이 이 기능들보다 앞선 판이면 업데이트 한 번으로 적용됩니다(접속 앱 설정 › 시스템 › 업데이트)
+- 사람 손이 남는 것
+
+| 할 일 | 어떻게 | 안 하면 |
+|---|---|---|
+| 직군 템플릿 고르기 | 매니저에게 "aivengers-setup 스킬대로 세팅해 줘"라고 말합니다. 하는 일을 한 문장으로 답하면 매니저가 맞는 템플릿의 미리보기를 보여 주고, 승인하면 작업자 봇·팀을 만듭니다 | 매니저 혼자 일합니다. 나중에 해도 됩니다 |
+| Honcho 추론용 API 키(선택) | 설정 › 시스템 › 모델 연결의 'Honcho 추론 키' 칸에 Claude Console API 키를 넣습니다(키 사용량은 따로 과금) | 대화는 쌓이고 추론만 쉽니다. 넣으면 지난 대화까지 추론합니다 |
+
+- 이미 쓰던 설치: 업데이트 한 번으로 같은 기본값이 적용됩니다. 직접 정한 설정과 고친 메모리·스킬은 그대로 두고, 무엇이 켜지고 들어왔는지 매니저 대화에 한 번 알립니다
+- 세팅을 에이전트(Claude Code)에게 맡기려면: 본체 저장소 `docs/operating-guide.md`(같은 절차의 에이전트용)
+- 자세한 내용: 본체 저장소 `docs/operating-guide.md`, `docs/learning.md`, `docs/teams.md`
 
 ## Mac 서버 내장 설치(예전 방식)
 
