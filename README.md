@@ -171,5 +171,5 @@ curl -fsSL https://raw.githubusercontent.com/Injae-Lee/aivengers-install/main/in
 - 시험: `sh test/bootstrap.test.sh`(리눅스에서도 돎. Homebrew 설치는 가짜 설치 스크립트로 보고, gh·tarball·실제 Homebrew는 Mac에서만 확인)
 - `install.sh`의 Homebrew 함수는 본체 `scripts/lib/brew-install.sh`와 같은 동작입니다. 바뀌면 같이 고칩니다
 - PR마다 shellcheck와 시험이 돕니다(`.github/workflows/check.yml`). `install.ps1`은 Windows job에서 PSScriptAnalyzer·PowerShell 5.1 파서로 봅니다
-- `install.ps1`은 본체 저장소 `scripts/install.ps1`의 사본입니다(본체가 Windows 쪽만 쓰고 WSL 안에서 clone하므로 그대로 돎). 본체가 바뀌면 같이 갱신합니다. 기준: 본체 `__MAIN__`(AIV-694)
+- `install.ps1`은 본체 저장소 `scripts/install.ps1`의 사본입니다(본체가 Windows 쪽만 쓰고 WSL 안에서 clone하므로 그대로 돎). 본체가 바뀌면 같이 갱신합니다. 기준: 본체 `9ae3d7d`(AIV-694)
 - 이 저장소에는 비밀값·내부 주소를 넣지 않습니다
