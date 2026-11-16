@@ -6,9 +6,13 @@
   WSL2 확인 → 배포판(기본 Ubuntu-24.04)의 systemd 켜기 → 권한이 필요한 준비를 root로(회사 인증서 신뢰, apt 패키지,
   docker 데몬, docker 그룹) → GitHub 인증(gh 기기 인증 또는 deploy key) → 배포판 안에 저장소 받기 → 배포판 안에서
   scripts/install.sh 실행(Linux면 scripts/install-linux.sh로 넘어가 이미지 빌드 → 서버 기동 → 헬스).
-  끝나면 Windows 브라우저로 http://127.0.0.1:45180 을 연다(WSL 포트 전달).
+  끝나면 접속 앱을 연다(앱을 깔지 않았으면 Windows 브라우저로 http://127.0.0.1:45180, WSL 포트 전달).
   데이터는 WSL 배포판 안 ~/.local/share/aivengers(XDG)에 둔다. C:\(/mnt/c)에는 두지 않는다(SQLite 잠금·속도·권한).
-  접속 전용 앱·호스트 실행기는 아직 없다(U9b).
+
+  접속 앱·호스트 실행기(AIV-668): GitHub 릴리스의 서명 없는 앱 zip(Aivengers-Desktop-win-x64.zip)을 WSL 안 gh로 받아
+  %LOCALAPPDATA%\Programs\Aivengers Desktop에 깔고 시작 메뉴 바로 가기를 만든다. 실행기는 기본으로 켠다(desktop.json hostRunner,
+  서버 prod.env AIVENGERS_HOST_RUNNER=1). 로그인할 때 열기도 기본으로 켠다: 앱이 HKCU Run에 감시 스크립트를 등록해 다음 로그인부터
+  앱을 띄우고 크래시 때 다시 띄운다(apps/desktop/src/win-keep-alive.ts). Git for Windows가 없으면 winget으로 깐다(사용자 범위).
 
   비대화형(AIV-594): root가 필요한 단계는 'wsl -u root'로 돌려 sudo 비밀번호를 묻지 않는다. WSL 안 설치기는 AIV_SUDO='sudo -n'으로
   돌아 혹시 sudo가 필요해도 기다리지 않고 실패한다. 에이전트(Claude Code 등)가 백그라운드로 돌려도 멈춰 서지 않는다.
@@ -46,8 +50,20 @@ param(
   [string]$CaFile = '',
   # Windows 신뢰 루트 내보내기를 끈다(-CaFile도 없으면 WSL 시스템 CA 묶음만).
   [switch]$NoWindowsCa,
-  # 접속 앱 설정(%LOCALAPPDATA%\Aivengers\desktop.json)에 호스트 실행기를 켠다("hostRunner": true). 기본은 끔.
+  # 호스트 실행기는 기본으로 켠다(AIV-668): desktop.json "hostRunner": true + 서버 prod.env AIVENGERS_HOST_RUNNER=1.
+  # -HostRunner는 옛 명령 호환용(뜻 없음), -NoHostRunner면 둘 다 건드리지 않는다.
   [switch]$HostRunner,
+  [switch]$NoHostRunner,
+  # 접속 앱(Windows exe, 서명 없음)을 깔지 않는다(AIV-668). 기본은 GitHub 릴리스의 zip을 받아 %LOCALAPPDATA%\Programs\Aivengers Desktop에 깖.
+  [switch]$NoApp,
+  # 릴리스 대신 이 zip(Windows 경로)으로 앱을 깐다. 옆에 <zip>.sha256이 있으면 맞춰 본다.
+  [string]$AppZip = '',
+  # 받을 릴리스 태그(예: desktop-v0.2.0). 비우면 최신 릴리스.
+  [string]$AppRelease = '',
+  # 로그인할 때 앱을 열지 않는다(desktop.json "openAtLogin": false). 기본은 켬(감시자가 크래시 때 다시 띄움).
+  [switch]$NoLoginItem,
+  # Git for Windows가 없을 때 winget으로 깔지 않는다(호스트 작업 봇의 셸·git용).
+  [switch]$NoGit,
   # gh 로그인 대신 읽기 전용 deploy key(배포판 안 ~/.local/state/aivengers/deploy_key). 처음에는 공개 키를 보여 주고 멈춘다
   # (종료 코드 2). 저장소 주인이 Deploy keys에 넣은 뒤 같은 명령을 다시 돌린다.
   [switch]$DeployKey,
@@ -157,6 +173,98 @@ function Find-WindowsNode24 {
   $major = 0
   if ($v -and [int]::TryParse(($v -split '\.')[0], [ref]$major) -and $major -ge 24) { return $cmd.Source }
   return ''
+}
+
+# ---- 접속 앱 설치(AIV-668) ----
+# 릴리스 자산 이름(.github/workflows/windows-release.yml과 같음). 옆에 <이름>.sha256(sha256sum 형식)이 함께 올라간다.
+$AppAsset = 'Aivengers-Desktop-win-x64.zip'
+$AppExeName = 'Aivengers Desktop.exe'
+
+# 릴리스 zip을 배포판 안 gh(설치 5단계에서 로그인)로 받는다. 저장소가 비공개라 브라우저 주소로는 못 받는다.
+# 받은 곳은 Windows 폴더(/mnt/c/...)다. 받은 태그는 같은 폴더 release.txt에 쓴다. gh 로그인이 없으면 3(-DeployKey 설치 등), 릴리스·자산이 없으면 4.
+$AppFetchScript = @'
+set -euo pipefail
+SLUG=__SLUG__
+TAG=__TAG__
+DEST=__DEST__
+ASSET=__ASSET__
+command -v gh >/dev/null 2>&1 || { echo "gh가 없습니다" >&2; exit 3; }
+gh auth status -h github.com >/dev/null 2>&1 || { echo "배포판 안 gh가 GitHub에 로그인돼 있지 않습니다" >&2; exit 3; }
+if [ -z "$TAG" ]; then
+  TAG=$(gh release view --repo "$SLUG" --json tagName -q .tagName 2>/dev/null || true)
+  [ -n "$TAG" ] || { echo "$SLUG 에 릴리스가 없습니다" >&2; exit 4; }
+fi
+mkdir -p "$DEST"
+rm -f "$DEST/$ASSET" "$DEST/$ASSET.sha256"
+echo "==> 접속 앱 받기: $SLUG $TAG $ASSET"
+gh release download "$TAG" --repo "$SLUG" --pattern "$ASSET" --pattern "$ASSET.sha256" --dir "$DEST" \
+  || { echo "$TAG 릴리스에 $ASSET 이 없습니다(windows-release 워크플로가 올림)" >&2; exit 4; }
+[ -s "$DEST/$ASSET" ] || { echo "받은 파일이 비었습니다: $DEST/$ASSET" >&2; exit 4; }
+printf '%s\n' "$TAG" > "$DEST/release.txt"
+echo "==> 받음: $TAG"
+'@
+
+# 감시자(keep-alive.ps1)와 앱을 끝낸다. 감시자를 먼저 끝내야 앱을 끄는 사이 다시 띄우지 않는다.
+function Stop-DesktopApp {
+  $keepers = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -like '*\Aivengers\keep-alive.ps1*' })
+  foreach ($k in $keepers) { Stop-Process -Id $k.ProcessId -Force -ErrorAction SilentlyContinue }
+  $apps = @(Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($AppExeName)) -ErrorAction SilentlyContinue)
+  if ($apps.Count -gt 0) {
+    Write-Step "도는 접속 앱을 끝냅니다($($apps.Count)개 프로세스, 감시자 $($keepers.Count)개)"
+    $apps | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+  }
+}
+
+# zip(옆에 .sha256이 있으면 해시 확인)을 풀어 $Dest에 깐다. 새 폴더에 푼 뒤 바꿔 끼워 반쯤 깔린 앱이 남지 않게 한다.
+# 돌려주는 값: exe 경로.
+function Install-DesktopApp([string]$Zip, [string]$Dest) {
+  $sum = "$Zip.sha256"
+  if (Test-Path -LiteralPath $sum -PathType Leaf) {
+    $want = ((Get-Content -LiteralPath $sum -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+    $got = (Get-FileHash -LiteralPath $Zip -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($want -ne $got) { Exit-Install "접속 앱 zip의 SHA-256이 다릅니다(기대 $want, 받은 $got): $Zip" }
+    Write-Step "접속 앱 zip SHA-256 확인"
+  }
+  $stage = "$Dest.new"
+  if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+  Expand-Archive -LiteralPath $Zip -DestinationPath $stage -Force
+  $exe = Get-ChildItem -LiteralPath $stage -Recurse -File -Filter $AppExeName | Select-Object -First 1
+  if (-not $exe) { Remove-Item -LiteralPath $stage -Recurse -Force; Exit-Install "zip 안에 $AppExeName 이 없습니다: $Zip" }
+  Stop-DesktopApp
+  $old = "$Dest.old"
+  if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Recurse -Force }
+  if (Test-Path -LiteralPath $Dest) { Move-Item -LiteralPath $Dest -Destination $old }
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Dest) | Out-Null
+  Move-Item -LiteralPath $exe.DirectoryName -Destination $Dest
+  foreach ($p in @($stage, $old)) { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue } }
+  $exePath = Join-Path $Dest $AppExeName
+  # 시작 메뉴 바로 가기(사용자 범위). 실패해도 앱은 깔려 있다.
+  try {
+    $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'Aivengers Desktop.lnk'
+    $sc = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+    $sc.TargetPath = $exePath
+    $sc.WorkingDirectory = $Dest
+    $sc.Save()
+    Write-Step "시작 메뉴 바로 가기: $lnk"
+  } catch { Write-Step "주의: 시작 메뉴 바로 가기를 만들지 못했습니다($($_.Exception.Message))" }
+  return $exePath
+}
+
+# Git for Windows(호스트 작업 봇의 셸 Git Bash·git). 없으면 winget으로 사용자 범위에 깐다. 실패해도 설치는 이어 간다.
+function Install-GitForWindows {
+  if (Get-Command git.exe -ErrorAction SilentlyContinue) { Write-Step 'Git for Windows 있음(그대로)'; return }
+  foreach ($p in @("$env:ProgramFiles\Git\cmd\git.exe", "$env:LOCALAPPDATA\Programs\Git\cmd\git.exe")) {
+    if ($p -and (Test-Path -LiteralPath $p)) { Write-Step "Git for Windows 있음: $p"; return }
+  }
+  if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
+    Write-Step '주의: Git for Windows가 없고 winget도 없습니다. https://git-scm.com/download/win 에서 깔아 주세요(호스트 작업 봇의 셸·git)'
+    return
+  }
+  Write-Step 'Git for Windows 설치(winget, 사용자 범위, 몇 분)'
+  & winget.exe install --id Git.Git -e --source winget --scope user --silent --accept-package-agreements --accept-source-agreements | Out-Host
+  if ($LASTEXITCODE -ne 0) { Write-Step "주의: winget으로 Git을 깔지 못했습니다(종료 코드 $LASTEXITCODE). 'winget install --id Git.Git -e'를 직접 돌려 주세요" }
 }
 
 # ---- WSL 켜기·재부팅 이어 하기·사용자 만들기(AIV-616) ----
@@ -565,6 +673,8 @@ exec bash scripts/install.sh "${INSTALL_ARGS[@]}"
 '@
 $installArgs = @('--install-docker', '--port', "$Port")
 if ($wslCa) { $installArgs += @('--ca-file', $wslCa) }
+# 서버 쪽 실행기 스위치(AIV-668): prod.env AIVENGERS_HOST_RUNNER=1. 앱 쪽(desktop.json hostRunner)만 켜면 서버가 연결을 받지 않는다.
+if (-not $NoHostRunner) { $installArgs += '--host-runner' }
 if ($DryRun) { $installArgs += '--dry-run' }
 $install = $install.Replace('__REPO__', (ConvertTo-BashQuoted $RepoUrl)).Replace('__BRANCH__', (ConvertTo-BashQuoted $Branch))
 $install = $install.Replace('__DRY__', $dryFlag).Replace('__DEPLOYKEY__', $(if ($DeployKey) { '1' } else { '0' }))
@@ -575,27 +685,81 @@ $code = Invoke-InDistro $install
 if ($code -eq 2) { Exit-Install 'deploy key를 저장소에 넣은 뒤 같은 명령을 다시 돌리세요(공개 키는 위 출력)' }
 if ($code -ne 0) { Exit-Install "WSL 안 설치기가 실패했습니다(종료 코드 $code). 위 출력을 확인하세요" }
 
-# ---- 6 접속 앱 설정(AIV-581·594) ----
-# 접속 앱(Windows, --win 빌드)과 호스트 실행기가 읽는 자리. 앱은 이 설치기가 깔지 않는다(따로 빌드·복사).
+# ---- 6 접속 앱 설치(AIV-668) ----
+# GitHub 릴리스의 서명 없는 앱 zip → %LOCALAPPDATA%\Programs\Aivengers Desktop. 못 받으면 서버 설치는 그대로 두고 알린다(APP_NOT_INSTALLED).
+$localApp = $(if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE 'AppData\Local' })
+$appInstallDir = Join-Path (Join-Path $localApp 'Programs') 'Aivengers Desktop'
+$appExe = ''
+$appTag = ''
+if ($NoApp) { Write-Step '접속 앱 설치 건너뜀(-NoApp)' }
+elseif ($DryRun) { Write-Step "(dry-run) 접속 앱 $(if ($AppZip) { $AppZip } else { "릴리스 $(if ($AppRelease) { $AppRelease } else { '최신' }) $AppAsset" }) → $appInstallDir, 시작 메뉴 바로 가기" }
+else {
+  $zip = ''
+  if ($AppZip) {
+    if (-not (Test-Path -LiteralPath $AppZip -PathType Leaf)) { Exit-Install "-AppZip 파일이 없습니다: $AppZip" }
+    $zip = (Resolve-Path -LiteralPath $AppZip).Path
+    $appTag = 'local'
+  } else {
+    $slug = ''
+    if ($RepoUrl -match '^https://github\.com/([^/]+/[^/]+?)(\.git)?/?$') { $slug = $Matches[1] }
+    $dl = Join-Path $AppDir 'download'
+    New-Item -ItemType Directory -Force -Path $dl | Out-Null
+    $dlWsl = Get-WslLine @('-d', $Distro, '--', 'wslpath', '-a', ($dl -replace '\\', '/')) | Select-Object -First 1
+    if (-not $slug -or -not $dlWsl) { $code = 5 }
+    else {
+      $fetch = $AppFetchScript.Replace('__SLUG__', (ConvertTo-BashQuoted $slug)).Replace('__TAG__', (ConvertTo-BashQuoted $AppRelease))
+      $fetch = $fetch.Replace('__DEST__', (ConvertTo-BashQuoted $dlWsl)).Replace('__ASSET__', (ConvertTo-BashQuoted $AppAsset))
+      $code = Invoke-InDistro $fetch
+    }
+    if ($code -eq 0) {
+      $zip = Join-Path $dl $AppAsset
+      $tagFile = Join-Path $dl 'release.txt'
+      if (Test-Path -LiteralPath $tagFile) { $appTag = (Get-Content -LiteralPath $tagFile -Raw).Trim() }
+    } else {
+      Write-Host "주의: 접속 앱을 받지 못했습니다(종료 코드 $code). 서버는 설치됐고 브라우저로 쓸 수 있습니다. 릴리스 zip을 받아 '-AppZip <zip 경로>'로 다시 돌리면 앱만 더 깝니다" -ForegroundColor Yellow
+      Write-Host 'APP_NOT_INSTALLED'
+    }
+  }
+  if ($zip) {
+    Write-Step "접속 앱 설치: $appInstallDir ($appTag)"
+    $appExe = Install-DesktopApp $zip $appInstallDir
+    Write-Step "접속 앱: $appExe (서명 없음)"
+  }
+}
+if ($NoGit) { Write-Step 'Git for Windows 확인 건너뜀(-NoGit)' }
+elseif ($DryRun) { Write-Step '(dry-run) Git for Windows가 없으면 winget install --id Git.Git --scope user' }
+else { Install-GitForWindows }
+
+# ---- 7 접속 앱 설정(AIV-581·594·668) ----
+# 접속 앱(Windows)과 호스트 실행기가 읽는 자리.
 # dataDir·repoDir는 WSL 공유 경로(\\wsl.localhost\<배포판>\...). 실행기는 의존성이 없어 repoDir의 packages/host-runner를 그대로 돌린다.
-$cfgDir = Join-Path $(if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE 'AppData\Local' }) 'Aivengers'
+# 실행기(hostRunner)·로그인할 때 열기(openAtLogin)는 기본으로 켠다. 앱이 openAtLogin을 읽어 HKCU Run 감시자를 등록한다(win-keep-alive.ts).
+$cfgDir = Join-Path $localApp 'Aivengers'
 $cfgFile = Join-Path $cfgDir 'desktop.json'
 $paths = Get-InDistroLine 'wslpath -w "${XDG_DATA_HOME:-$HOME/.local/share}/aivengers"; wslpath -w "${XDG_DATA_HOME:-$HOME/.local/share}/aivengers-src"'
-if ($DryRun) { Write-Step "(dry-run) $cfgFile 에 mode·dataDir·repoDir·node 쓰기" }
+if ($DryRun) { Write-Step "(dry-run) $cfgFile 에 mode·dataDir·repoDir·node·hostRunner·openAtLogin·appDir 쓰기" }
 elseif ($paths.Count -ge 2) {
-  $vals = @{ mode = 'client'; dataDir = $paths[0]; repoDir = $paths[1] }
+  $vals = @{ mode = 'client'; dataDir = $paths[0]; repoDir = $paths[1]; openAtLogin = (-not $NoLoginItem) }
   $node = Find-WindowsNode24
   if ($node) { $vals['node'] = $node }
-  if ($HostRunner) { $vals['hostRunner'] = $true }
+  if (-not $NoHostRunner) { $vals['hostRunner'] = $true }
+  if ($appExe) { $vals['appDir'] = $appInstallDir; $vals['appRelease'] = $appTag }
   Write-DesktopConfig $cfgFile $vals
-  Write-Step "접속 앱 설정: $cfgFile (dataDir $($paths[0]), repoDir $($paths[1])$(if ($node) { ", node $node" }))"
+  Write-Step "접속 앱 설정: $cfgFile (dataDir $($paths[0]), repoDir $($paths[1])$(if ($node) { ", node $node" }), 실행기 $(if ($NoHostRunner) { '그대로' } else { '켬' }), 로그인할 때 열기 $(-not $NoLoginItem))"
 } else {
   Write-Step "주의: WSL 경로를 읽지 못해 $cfgFile 을 쓰지 않았습니다(접속 앱·실행기에만 필요)"
 }
 
 $url = "http://127.0.0.1:$Port"
-Write-Step "끝. 브라우저: $url"
-if (-not $DryRun -and -not $NoBrowser) { Start-Process $url }
+if ($appExe) {
+  # 앱을 연다. 서버에 붙으면 앱이 로그인할 때 열기(감시자)를 등록하고 실행기를 띄운다.
+  Write-Step "끝. 접속 앱을 엽니다: $appExe"
+  Start-Process -FilePath $appExe
+  Write-Host 'APP_STARTED'
+} else {
+  Write-Step "끝. 브라우저: $url"
+  if (-not $DryRun -and -not $NoBrowser) { Start-Process $url }
+}
 # Claude 로그인(사람 손: 브라우저 승인·코드 붙여넣기). 새 터미널 창이라 에이전트가 대신 치지 않는다.
 if (-not $DryRun -and -not $NoClaudeLogin) { Open-ClaudeLoginWindow }
 Write-Host 'INSTALL_DONE'
