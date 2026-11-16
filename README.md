@@ -65,7 +65,8 @@ irm https://raw.githubusercontent.com/Injae-Lee/aivengers-install/main/install.p
 powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\aivengers-install.ps1
 ```
 
-- WSL2 배포판 안에 Docker Engine을 깔고 서버를 docker로 띄웁니다. 브라우저 `http://127.0.0.1:45180`
+- WSL2 배포판 안에 Docker Engine을 깔고 서버를 docker로 띄웁니다. 접속 앱(서명 없는 exe, 본체 GitHub 릴리스)을 `%LOCALAPPDATA%\Programs\Aivengers Desktop`에 깔고 엽니다(앱을 못 받으면 브라우저 `http://127.0.0.1:45180`)
+- 호스트 실행기(사용자 컴퓨터에서 일하는 봇)와 로그인할 때 앱 열기(크래시 때 다시 띄움)를 기본으로 켭니다. Git for Windows가 없으면 winget으로 깝니다
 - sudo 비밀번호를 묻지 않습니다(권한이 필요한 일은 `wsl -u root`). 회사 TLS 검사 인증서는 Windows 신뢰 루트에서 가져옵니다
 - 사람 손(화면 승인뿐):
 
@@ -77,7 +78,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\aivengers-install.
 | Claude | 설치 끝 | 저절로 뜨는 'Claude 로그인' 창의 주소를 브라우저에서 승인하고 코드 붙여넣기 |
 
 - 기록: `%LOCALAPPDATA%\Aivengers\logs\install-*.log`
-- 옵션: `-DryRun`, `-NoBrowser`, `-NoClaudeLogin`, `-RebootNow`, `-Distro <이름>`, `-Port <번호>`, `-CaFile <PEM>`, `-NoWindowsCa`, `-DeployKey`, `-HostRunner`, `-Branch <이름>`
+- 옵션: `-DryRun`, `-NoBrowser`, `-NoClaudeLogin`, `-RebootNow`, `-Distro <이름>`, `-Port <번호>`, `-CaFile <PEM>`, `-NoWindowsCa`, `-DeployKey`, `-Branch <이름>`
+- 앱·실행기 옵션: `-NoApp`, `-AppZip <zip>`, `-AppRelease <태그>`, `-NoHostRunner`, `-NoLoginItem`, `-NoGit`(`-HostRunner`는 옛 명령 호환용, 이제 기본)
 - 자세한 내용: 본체 저장소 `docs/install-windows.md`
 
 ### Windows(에이전트용)
@@ -96,7 +98,7 @@ https://github.com/Injae-Lee/aivengers-install 의 README 'Windows(에이전트�
    - `REBOOT_REQUIRED`(종료 코드 3010)이면 이렇게 말하고 답을 기다립니다: "WSL을 켜려면 재부팅이 한 번 필요합니다. 재부팅 뒤 다시 로그인하면 'Aivengers 설치 이어 하기' 창이 저절로 떠서 끝까지 진행합니다. GitHub 코드와 Claude 로그인도 그 창에서 안내합니다. 이 대화로 돌아오지 않아도 됩니다. 지금 재부팅할까요?" → 예면 `shutdown.exe /r /t 30`을 실행하고 끝냅니다
    - `one-time code: XXXX-XXXX`가 보이면 그 코드와 https://github.com/login/device 를 사람에게 보여 주고 승인을 기다립니다(설치기가 스스로 이어 감, 약 15분 안)
    - 공개 키·`Deploy keys` 안내가 보이면(`-DeployKey`) 공개 키 한 줄을 사람에게 보여 주고 멈춥니다
-3. `INSTALL_DONE`이 보이면 `==> 서버 응답 200`을 확인합니다. `CLAUDE_LOGIN_WINDOW`가 있으면 "새로 뜬 'Claude 로그인' 창의 주소를 브라우저에서 열어 승인하고, 받은 코드를 그 창에 붙여 넣어 주세요"라고 말합니다. 로그인 명령을 대신 치지 않습니다
+3. `INSTALL_DONE`이 보이면 `==> 서버 응답 200`을 확인합니다. `APP_STARTED`면 접속 앱이 떴습니다. `APP_NOT_INSTALLED`면 그 앞 줄(종료 코드·이유)을 사람에게 알립니다(서버는 브라우저로 쓸 수 있음). `CLAUDE_LOGIN_WINDOW`가 있으면 "새로 뜬 'Claude 로그인' 창의 주소를 브라우저에서 열어 승인하고, 받은 코드를 그 창에 붙여 넣어 주세요"라고 말합니다. 로그인 명령을 대신 치지 않습니다
 4. 재부팅 뒤 사람이 이 대화로 돌아와 물으면 `%LOCALAPPDATA%\Aivengers\logs`의 가장 새 `install-*.log` 끝 30줄을 읽어 상태를 알려 줍니다
 5. 사람이 로그인했다고 하면 아래를 돌려 `# · PASS/FAIL · 출력 한 줄` 표로 보고합니다
    - `curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:45180/api/auth/me` → `200`
@@ -144,5 +146,5 @@ curl -fsSL https://raw.githubusercontent.com/Injae-Lee/aivengers-install/main/in
 - 시험: `sh test/bootstrap.test.sh`(리눅스에서도 돎. Homebrew 설치는 가짜 설치 스크립트로 보고, gh·tarball·실제 Homebrew는 Mac에서만 확인)
 - `install.sh`의 Homebrew 함수는 본체 `scripts/lib/brew-install.sh`와 같은 동작입니다. 바뀌면 같이 고칩니다
 - PR마다 shellcheck와 시험이 돕니다(`.github/workflows/check.yml`). `install.ps1`은 Windows job에서 PSScriptAnalyzer·PowerShell 5.1 파서로 봅니다
-- `install.ps1`은 본체 저장소 `scripts/install.ps1`의 사본입니다(본체가 Windows 쪽만 쓰고 WSL 안에서 clone하므로 그대로 돎). 본체가 바뀌면 같이 갱신합니다. 기준: 본체 `e5c8846`(AIV-616)
+- `install.ps1`은 본체 저장소 `scripts/install.ps1`의 사본입니다(본체가 Windows 쪽만 쓰고 WSL 안에서 clone하므로 그대로 돎). 본체가 바뀌면 같이 갱신합니다. 기준: 본체 `bd08a7f`(AIV-668)
 - 이 저장소에는 비밀값·내부 주소를 넣지 않습니다
