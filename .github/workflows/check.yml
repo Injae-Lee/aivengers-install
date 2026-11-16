@@ -49,8 +49,8 @@ jobs:
           $out = & powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Distro Aivengers-CI-None -DryRun -NoBrowser 2>&1 | Out-String
           $code = $LASTEXITCODE
           $out
-          if ($code -ne 0) { "dry-run 실패(종료 코드 $code)"; exit 1 }
-          if ($out -notmatch '\(dry-run\).*wsl') { "WSL 설치 dry-run 줄 없음"; exit 1 }
+          if ($code -ne 0) { "dry-run failed (exit $code)"; exit 1 }
+          if ($out -notmatch '\(dry-run\).*wsl') { "no WSL install dry-run line"; exit 1 }
 
   # 사용자 Mac과 같은 macOS 기본 bash(3.2)로 돌린다. 리눅스 bash에서 안 보이던 문제(비ASCII 뒤 변수 이름 등)를 잡는다.
   macos:

@@ -92,9 +92,12 @@ have_tty() {
   [ -r /dev/tty ] && [ -w /dev/tty ] && { : </dev/tty; } 2>/dev/null
 }
 
+# AIV_BREW_PREFIX(시험용)를 주면 그 자리만 본다(러너에 깔린 Homebrew를 찾지 않게).
 brew_bin() {
-  if has brew; then command -v brew
-  elif [ -x "${AIV_BREW_PREFIX:-/opt/homebrew}/bin/brew" ]; then echo "${AIV_BREW_PREFIX:-/opt/homebrew}/bin/brew"
+  if [ -n "${AIV_BREW_PREFIX:-}" ]; then
+    if [ -x "$AIV_BREW_PREFIX/bin/brew" ]; then echo "$AIV_BREW_PREFIX/bin/brew"; fi
+  elif has brew; then command -v brew
+  elif [ -x /opt/homebrew/bin/brew ]; then echo /opt/homebrew/bin/brew
   fi
 }
 
