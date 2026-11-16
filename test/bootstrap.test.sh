@@ -89,6 +89,34 @@ check '[ "$RC" -ne 0 ] && grep -q "비어 있지 않은 폴더" "$T/out"' "비�
 run --dir '~/Aivengers-desktop'
 check '[ "$RC" -eq 0 ] && grep -q "^--dir$" "$T/body-args" && grep -q "^$H/Aivengers-desktop$" "$T/body-args"' "따옴표 친 ~ 펼침"
 
+# --install-docker이고 Homebrew가 없으면 공식 스크립트를 NONINTERACTIVE로 돌린다. 터미널이 없으면 비밀번호 창(SUDO_ASKPASS)(AIV-660)
+HB=$T/homebrew
+cat >"$T/brew-install.sh" <<EOF
+echo "installer NONINTERACTIVE=\$NONINTERACTIVE askpass=\${SUDO_ASKPASS:+set}" >>"$T/brew-calls"
+[ -n "\${SUDO_ASKPASS:-}" ] && cat "\$SUDO_ASKPASS" >"$T/askpass-copy"
+[ -f "$T/brew-fails" ] && exit 1
+mkdir -p "$HB/bin"
+printf '#!/bin/sh\nexit 0\n' >"$HB/bin/brew"
+chmod +x "$HB/bin/brew"
+EOF
+export AIV_BREW_PREFIX="$HB" AIV_BREW_INSTALL_URL="file://$T/brew-install.sh" AIVENGERS_NO_TTY=1 AIV_OSASCRIPT=/fake/osascript
+: >"$T/brew-fails"
+run --dir "$H/Aivengers-desktop" --docker --install-docker
+check '[ "$RC" -ne 0 ] && grep -q "Homebrew 설치가 끝나지 않았습니다" "$T/out"' "Homebrew 설치 실패면 멈춤"
+rm -f "$T/brew-fails" "$T/body-args"
+run --dir "$H/Aivengers-desktop" --docker --install-docker
+check '[ "$RC" -eq 0 ] && grep -q "^installer NONINTERACTIVE=1 askpass=set$" "$T/brew-calls"' "터미널 없음: NONINTERACTIVE·SUDO_ASKPASS로 Homebrew 설치"
+check 'grep -q "^SUDO_PASSWORD_DIALOG:" "$T/out" && grep -q "/fake/osascript" "$T/askpass-copy" && grep -q "with hidden answer" "$T/askpass-copy"' "비밀번호 창 표시 줄·숨김 입력 창"
+check 'grep -q "^--docker$" "$T/body-args" && grep -q "^--install-docker$" "$T/body-args"' "--docker·--install-docker는 본체로 넘김"
+: >"$T/brew-calls"
+run --dir "$H/Aivengers-desktop" --docker --install-docker
+check '[ "$RC" -eq 0 ] && [ ! -s "$T/brew-calls" ]' "다시 실행: 깔린 Homebrew(PATH 밖이어도)는 다시 깔지 않음"
+rm -rf "$HB"
+: >"$T/brew-calls"
+run --dir "$H/Aivengers-desktop" --no-launch
+check '[ "$RC" -eq 0 ] && [ ! -s "$T/brew-calls" ]' "--install-docker가 없으면 Homebrew를 깔지 않음"
+unset AIV_BREW_PREFIX AIV_BREW_INSTALL_URL AIVENGERS_NO_TTY AIV_OSASCRIPT
+
 env HOME="$H" AIVENGERS_INSTALL_SKIP_PLATFORM= bash -c 'uname() { [ "$1" = -s ] && echo Linux || echo x86_64; }; export -f uname; bash "$0" --dir "$HOME/z"' "$BOOT" >"$T/out" 2>&1 && RC=0 || RC=$?
 check '[ "$RC" -ne 0 ] && grep -q "macOS만 지원" "$T/out"' "macOS 아니면 멈춤"
 

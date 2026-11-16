@@ -4,13 +4,17 @@
 #   curl -fsSL https://raw.githubusercontent.com/Injae-Lee/aivengers-install/main/install.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/Injae-Lee/aivengers-install/main/install.sh | bash -s -- --dir ~/Aivengers-desktop --port 45280
 #
-# 하는 일(얇게): macOS(Apple Silicon) 확인 → git(Xcode CLT) → Node 24 이상 → pnpm → gh 로그인 → 비공개 저장소 clone·갱신
-# → 저장소 안의 scripts/install.sh(본체)로 넘긴다. 빌드·앱 놓기·설정은 본체가 한다(저장소 코드와 함께 바뀌어 판이 어긋나지 않음).
+# 하는 일(얇게): macOS(Apple Silicon) 확인 → (--install-docker면) Homebrew → git(Xcode CLT) → Node 24 이상 → pnpm → gh 로그인
+# → 비공개 저장소 clone·갱신 → 저장소 안의 scripts/install.sh(본체)로 넘긴다. 빌드·앱 놓기·설정은 본체가 한다(판이 어긋나지 않음).
+# 터미널 없이(Claude Code 같은 에이전트가) 돌려도 멈춰 서지 않는다(README 'Mac(에이전트용)'):
+#   Homebrew 비밀번호는 macOS 비밀번호 창(SUDO_PASSWORD_DIALOG 줄), GitHub은 기기 코드(one-time code 줄)를 찍고 승인을 기다린다.
+#   저장소 초대가 와 있으면 로그인한 계정으로 수락한다(메일을 열지 않아도 됨).
 # 이 파일에는 비밀값·내부 주소를 넣지 않는다.
 #
 # 옵션(이 스크립트가 쓰는 것): --dir <clone 위치>(기본 ~/Aivengers-desktop), --branch <브랜치·태그>(기본 main),
 #   --deploy-key(gh 대신 읽기 전용 deploy key로 받기), -h|--help. 나머지 옵션은 본체로 그대로 넘긴다
-#   (--port, --data-dir, --no-launch, --repair, --applications).
+#   (--docker, --install-docker, --no-claude-login, --port, --data-dir, --no-launch, --repair, --applications).
+#   --install-docker가 있으면 Homebrew가 없을 때 여기서 먼저 깐다(본체가 Colima·docker를 brew로 깖).
 # 로그: ~/.aivengers/logs/bootstrap-<시각>.log
 #
 # 함수 안에서만 실행한다: 내려받기가 중간에 끊겨도 반쯤 받은 스크립트가 돌지 않게 마지막 줄에서 main을 부른다.
@@ -30,6 +34,7 @@ LOG_DIR="$STATE_DIR/logs"
 DIR="$HOME/Aivengers-desktop"
 BRANCH="main"
 USE_DEPLOY_KEY=0
+WANT_BREW=0
 PASS_ARGS=()
 LOG_FILE=""
 
@@ -58,6 +63,7 @@ parse_args() {
       --branch=*) BRANCH="${1#*=}"; shift ;;
       --deploy-key) USE_DEPLOY_KEY=1; shift ;;
       -h|--help) usage; exit 0 ;;
+      --install-docker) WANT_BREW=1; PASS_ARGS+=("$1"); shift ;;
       *) PASS_ARGS+=("$1"); shift ;;
     esac
   done
@@ -79,12 +85,60 @@ check_platform() {
 }
 
 # /dev/tty가 있어야 gh 로그인·Xcode 설치 확인을 할 수 있다(curl | bash에서도 터미널에서 받는다).
-have_tty() { [ -r /dev/tty ] && [ -w /dev/tty ] && : </dev/tty 2>/dev/null; }
+# AIVENGERS_NO_TTY=1이면 터미널이 있어도 없는 것처럼 한다: 에이전트(Claude Code 등)의 셸이 사람의 터미널을 물려받아도
+# 그 화면에 비밀번호·Enter를 묻지 않고 비밀번호 창·코드 줄로 간다(README 'Mac(에이전트용)'). 본체도 같은 값을 읽는다.
+have_tty() {
+  [ "${AIVENGERS_NO_TTY:-}" != 1 ] || return 1
+  [ -r /dev/tty ] && [ -w /dev/tty ] && { : </dev/tty; } 2>/dev/null
+}
 
 brew_bin() {
   if has brew; then command -v brew
-  elif [ -x /opt/homebrew/bin/brew ]; then echo /opt/homebrew/bin/brew
+  elif [ -x "${AIV_BREW_PREFIX:-/opt/homebrew}/bin/brew" ]; then echo "${AIV_BREW_PREFIX:-/opt/homebrew}/bin/brew"
   fi
+}
+
+# Homebrew 비대화형 설치(본체 scripts/lib/brew-install.sh의 aiv_ensure_brew와 같은 동작, 바뀌면 함께 고친다).
+# 공식 스크립트를 NONINTERACTIVE=1로 돌린다. sudo 비밀번호는 사람이 넣는다: 터미널이 있으면 터미널(sudo -v),
+# 없으면 macOS 비밀번호 창(SUDO_ASKPASS, osascript). Xcode Command Line Tools도 이 스크립트가 함께 깐다(설치 창 없음).
+# 시험용: AIV_BREW_PREFIX, AIV_BREW_INSTALL_URL, AIV_SUDO, AIV_OSASCRIPT, AIV_HAVE_TTY(1·0)
+brew_have_tty() {
+  case "${AIV_HAVE_TTY:-}" in 1) return 0 ;; 0) return 1 ;; esac
+  have_tty
+}
+
+ensure_brew() {
+  local bin; bin=$(brew_bin)
+  if [ -n "$bin" ]; then PATH="$(dirname "$bin"):$PATH"; export PATH; return 0; fi
+  local prefix="${AIV_BREW_PREFIX:-/opt/homebrew}" sudo="${AIV_SUDO:-sudo}" osa="${AIV_OSASCRIPT:-/usr/bin/osascript}"
+  local url="${AIV_BREW_INSTALL_URL:-https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh}"
+  local tmp; tmp=$(mktemp -d "${TMPDIR:-/tmp}/aiv-brew.XXXXXX")
+  say "Homebrew가 없어 설치합니다(공식 스크립트, 몇 분 걸림). 관리자 비밀번호가 필요합니다"
+  curl -fsSL --retry 3 "$url" -o "$tmp/install.sh" || { rm -rf "$tmp"; die "Homebrew 설치 스크립트를 내려받지 못했습니다($url)"; }
+  local keep="" rc=0
+  if brew_have_tty; then
+    say "터미널에 이 Mac의 로그인 비밀번호를 넣어 주세요(sudo, 화면에 안 보임)"
+    "$sudo" -v </dev/tty || { rm -rf "$tmp"; die "sudo 비밀번호를 받지 못했습니다. 이 계정이 관리자인지 확인하세요"; }
+    # 설치가 sudo 표 유효 시간(5분)보다 오래 걸려도 다시 묻지 않게 살려 둔다.
+    ( while sleep 50; do "$sudo" -n true 2>/dev/null || exit 0; done ) &
+    keep=$!
+    (unset SUDO_ASKPASS; NONINTERACTIVE=1 bash "$tmp/install.sh" </dev/null) || rc=$?
+  else
+    cat >"$tmp/askpass.sh" <<EOF
+#!/bin/sh
+exec "$osa" -e 'text returned of (display dialog "Aivengers 설치: Homebrew를 깔려면 이 Mac의 로그인 비밀번호가 필요합니다." default answer "" with hidden answer with title "Aivengers 설치" buttons {"취소", "확인"} default button "확인" cancel button "취소" with icon caution)'
+EOF
+    chmod 700 "$tmp/askpass.sh"
+    printf 'SUDO_PASSWORD_DIALOG: 화면에 뜬 "Aivengers 설치" 비밀번호 창에 이 Mac의 로그인 비밀번호를 넣어 주세요\n'
+    (SUDO_ASKPASS="$tmp/askpass.sh" NONINTERACTIVE=1 bash "$tmp/install.sh" </dev/null) || rc=$?
+  fi
+  [ -z "$keep" ] || kill "$keep" 2>/dev/null || true
+  rm -rf "$tmp"
+  if [ "$rc" != 0 ] || [ ! -x "$prefix/bin/brew" ]; then
+    die "Homebrew 설치가 끝나지 않았습니다(종료 코드 ${rc}). 관리자 계정인지, 비밀번호 창을 취소하지 않았는지 확인한 뒤 다시 실행하세요"
+  fi
+  PATH="$prefix/bin:$prefix/sbin:$PATH"; export PATH
+  say "Homebrew 설치됨: $prefix/bin/brew"
 }
 
 ensure_git() {
@@ -197,14 +251,30 @@ ensure_gh() {
   fi
   PATH="$(dirname "$GH_BIN"):$PATH"; export PATH
   if ! "$GH_BIN" auth status -h github.com >/dev/null 2>&1; then
-    have_tty || die "GitHub 로그인이 필요한데 터미널이 없습니다. 터미널 앱에서 다시 실행하세요"
-    say "GitHub에 로그인합니다. 화면의 8자리 코드를 브라우저(github.com/login/device)에 넣으세요"
-    "$GH_BIN" auth login -h github.com --web --git-protocol https </dev/tty
+    say "GitHub에 로그인합니다. 아래 8자리 코드(one-time code)를 브라우저 https://github.com/login/device 에 넣고 승인하세요(승인할 때까지 기다림, 약 15분)"
+    if have_tty; then
+      "$GH_BIN" auth login -h github.com --web --git-protocol https </dev/tty
+    else
+      # 터미널이 없으면(에이전트가 돌림) 입력을 막아 gh가 Enter·질문을 기다리지 않게 한다. 코드 줄은 그대로 찍히고 브라우저는 gh가 연다.
+      "$GH_BIN" auth login -h github.com --web --git-protocol https </dev/null
+    fi
   fi
   "$GH_BIN" auth setup-git -h github.com
+  if ! "$GH_BIN" repo view "$REPO_SLUG" --json name >/dev/null 2>&1; then
+    accept_invitation || true
+  fi
   "$GH_BIN" repo view "$REPO_SLUG" --json name >/dev/null 2>&1 \
-    || die "$REPO_SLUG 저장소에 접근할 수 없습니다. 저장소 주인에게 초대를 받은 뒤(메일에서 수락) 다시 실행하세요. 초대 대신 --deploy-key를 쓸 수도 있습니다"
+    || die "$REPO_SLUG 저장소에 접근할 수 없습니다. 저장소 주인에게 이 GitHub 계정($("$GH_BIN" api user --jq .login 2>/dev/null || echo '?'))의 초대를 부탁한 뒤 다시 실행하세요(초대가 오면 설치기가 수락합니다). 초대 대신 --deploy-key를 쓸 수도 있습니다"
   say "gh: 로그인됨, 저장소 접근 확인"
+}
+
+# 저장소 초대가 와 있으면 로그인한 계정으로 수락한다(메일 링크를 누른 것과 같음). 없으면 1.
+accept_invitation() {
+  local id
+  id=$("$GH_BIN" api user/repository_invitations --jq ".[] | select(.repository.full_name == \"$REPO_SLUG\") | .id" 2>/dev/null | head -n 1)
+  [ -n "$id" ] || return 1
+  "$GH_BIN" api -X PATCH "user/repository_invitations/$id" >/dev/null || { warn "저장소 초대를 수락하지 못했습니다(초대 $id)"; return 1; }
+  say "$REPO_SLUG 저장소 초대를 수락했습니다"
 }
 
 # 읽기 전용 deploy key: 키를 만들고 공개 키를 보여 준다. 저장소 주인이 저장소 Deploy keys에 넣은 뒤 다시 실행한다.
@@ -252,6 +322,11 @@ main() {
   parse_args "$@"
   open_log
   check_platform
+  # --install-docker(docker 서버 설치)면 Homebrew를 먼저: 본체가 Colima·docker를 brew로 깔고, Xcode CLT(git)도 함께 깔린다.
+  # 시험(AIVENGERS_INSTALL_SKIP_PLATFORM=1)에서는 AIV_BREW_INSTALL_URL을 줄 때만 이 단계를 탄다.
+  if [ "$WANT_BREW" = 1 ]; then
+    if [ "${AIVENGERS_INSTALL_SKIP_PLATFORM:-}" != 1 ] || [ -n "${AIV_BREW_INSTALL_URL:-}" ]; then ensure_brew; fi
+  fi
   ensure_git
   ensure_node
   ensure_pnpm
