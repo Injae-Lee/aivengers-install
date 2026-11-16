@@ -81,7 +81,26 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\aivengers-install.
 - 옵션: `-DryRun`, `-NoBrowser`, `-NoClaudeLogin`, `-RebootNow`, `-Distro <이름>`, `-Port <번호>`, `-CaFile <PEM>`, `-NoWindowsCa`, `-DeployKey`, `-Branch <이름>`
 - 앱·실행기 옵션: `-NoApp`, `-AppZip <zip>`, `-AppRelease <태그>`, `-NoHostRunner`, `-NoLoginItem`, `-NoGit`(`-HostRunner`는 옛 명령 호환용, 이제 기본)
 - 업데이트: 설치 뒤에는 접속 앱의 설정 › 시스템 › 업데이트 [업데이트하고 다시 열기]가 서버·앱을 새 판으로 바꿉니다. 이 설치기의 `-AppOnly`(WSL·서버 단계 없이 앱만 최신 릴리스로)는 그 버튼이 부릅니다
+  - 접속 앱·업데이트 버튼이 생기기 전에 설치한 옛 설치는 위 두 줄을 한 번 다시 돌려야 버튼이 생깁니다(아래 '이미 설치된 Windows'). 그 뒤로는 버튼으로 충분합니다
 - 자세한 내용: 본체 저장소 `docs/install-windows.md`
+
+### 이미 설치된 Windows(다시 설치·업그레이드)
+
+- 새 설치와 같은 두 줄을 그대로 다시 돌립니다. 배포판·docker·데이터·설정을 지우거나 새로 만들지 않습니다
+- 설치기가 스스로 찾아 씀(옵션을 붙이지 않아도 됨)
+  - 배포판: `desktop.json`(`%LOCALAPPDATA%\Aivengers`)에 적힌 배포판, 없으면 설정(`~/.config/aivengers/prod.env`)이 있는 배포판
+  - 포트: 그 `prod.env`의 `AIV_PORT`(서버 응답 확인도 그 포트로)
+- 그대로 두는 것: WSL 배포판, docker, 데이터(`~/.local/share/aivengers`: DB·봇 홈), 설정(`prod.env`·`compose.override.yaml`), 배포 토큰, Claude 로그인, `desktop.json`의 다른 값
+- 새로 들어가는 것: 저장소 새 판으로 다시 배포(진행 중 런을 기다린 뒤 DB 백업, 실패하면 되돌림), 접속 앱, 호스트 실행기, 로그인할 때 앱 열기, 업데이트 버튼
+- 기대 출력 줄: `기존 설치 있음(배포판 …, 포트 …)`, `GitHub 접근 확인(받은 저장소)`, `배포 토큰 있음(그대로)`, `설정 있음(그대로)`, `호스트 실행기 켬`(또는 `켜짐(그대로)`), `접속 앱 설치 … (desktop-v…)`, `Claude 로그인 돼 있음(건너뜀)`, `APP_STARTED`, `서버 응답 200`, `INSTALL_DONE`
+- 사람 손: 보통 없습니다. GitHub 로그인이 만료됐으면 8자리 코드, Claude 로그인이 풀렸으면 로그인 창만 다시 나옵니다
+- 멈추거나 앱이 빠지는 경우
+
+| 출력 | 뜻 | 할 일 |
+|---|---|---|
+| `REPO_DIRTY: <사본>`과 바뀐 파일 목록 | WSL 안 저장소 사본(설치기가 받은 것)에 바뀐 파일이 있어 받지 않음. 서버·데이터는 그대로 | 목록을 확인하고, 남겨 둔 채 치우는 출력의 `git … stash push -u -m aivengers-install`을 `wsl -d <배포판> --` 뒤에 붙여 돌린 뒤 같은 두 줄 다시(되돌리기 `stash pop`) |
+| `gh가 GitHub에 로그인돼 있지 않아` 뒤 `APP_NOT_INSTALLED` | 예전에 `-DeployKey`로 설치해 배포판 안 gh 로그인이 없음. 서버는 새 판으로 설치됨 | 저장소에 초대된 GitHub 계정이 있으면 출력의 `gh auth login` 명령으로 로그인 뒤 `-AppOnly`로 다시. 없으면 저장소 주인에게 릴리스 zip·`.sha256`을 받아 `-AppOnly -AppZip <zip>` |
+| `fast-forward하지 못했습니다` | 사본에 origin에 없는 커밋이 있음 | 출력의 `git log` 명령으로 확인하고 사람이 정함 |
 
 ### Windows(에이전트용)
 
@@ -91,23 +110,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\aivengers-install.
 https://github.com/Injae-Lee/aivengers-install 의 README 'Windows(에이전트용)' 절을 읽고 그대로 따라 Aivengers를 이 Windows에 설치해 줘.
 ```
 
+이미 설치된 Windows(다시 설치·업그레이드)도 같은 한 줄입니다. 에이전트는 아래 순서를 그대로 따릅니다: 설치기가 설치 때 쓴 배포판·포트를 찾아 쓰고 데이터·설정은 그대로 둡니다(위 '이미 설치된 Windows').
+
 에이전트가 할 일:
 
 1. `irm https://raw.githubusercontent.com/Injae-Lee/aivengers-install/main/install.ps1 -OutFile $env:TEMP\aivengers-install.ps1`
-2. `powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\aivengers-install.ps1 -NoBrowser`를 **백그라운드로** 실행하고 출력을 계속 읽습니다(수십 분). WSL이 없어도 미리 설치하지 않습니다(설치기가 함)
+2. `powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\aivengers-install.ps1 -NoBrowser`를 **백그라운드로** 실행하고 출력을 계속 읽습니다(수십 분). WSL이 없어도 미리 설치하지 않습니다(설치기가 함). 이미 설치돼 있어도 지우거나 멈추지 않고 그대로 돌리며, `-Distro`·`-Port`를 짐작해 붙이지 않습니다
+   - `기존 설치 있음(…)`이 보이면 이미 설치된 Windows입니다. 데이터·설정은 그대로 두고 새 판으로 올립니다
    - `UAC`·`"예"`가 보이면: "화면에 뜬 사용자 계정 컨트롤 창에서 '예'를 눌러 주세요"라고 말합니다
    - `REBOOT_REQUIRED`(종료 코드 3010)이면 이렇게 말하고 답을 기다립니다: "WSL을 켜려면 재부팅이 한 번 필요합니다. 재부팅 뒤 다시 로그인하면 'Aivengers 설치 이어 하기' 창이 저절로 떠서 끝까지 진행합니다. GitHub 코드와 Claude 로그인도 그 창에서 안내합니다. 이 대화로 돌아오지 않아도 됩니다. 지금 재부팅할까요?" → 예면 `shutdown.exe /r /t 30`을 실행하고 끝냅니다
    - `one-time code: XXXX-XXXX`가 보이면 그 코드와 https://github.com/login/device 를 사람에게 보여 주고 승인을 기다립니다(설치기가 스스로 이어 감, 약 15분 안)
    - 공개 키·`Deploy keys` 안내가 보이면(`-DeployKey`) 공개 키 한 줄을 사람에게 보여 주고 멈춥니다
+   - `REPO_DIRTY`가 보이면(설치기가 멈춤) 그 아래 바뀐 파일 목록과 출력의 stash 명령을 사람에게 보여 주고 "남겨 둔 채 치우고 다시 돌릴까요?"라고 묻습니다. 예면 `wsl -d <배포판> -- git -C '<사본>' stash push -u -m aivengers-install`(출력 그대로, 배포판은 `==> WSL 배포판 …` 줄)을 돌린 뒤 2번을 다시 합니다. 파일을 지우거나 되돌리지 않습니다
 3. `INSTALL_DONE`이 보이면 `==> 서버 응답 200`을 확인합니다. `APP_STARTED`면 접속 앱이 떴습니다. `APP_NOT_INSTALLED`면 그 앞 줄(종료 코드·이유)을 사람에게 알립니다(서버는 브라우저로 쓸 수 있음). `CLAUDE_LOGIN_WINDOW`가 있으면 "새로 뜬 'Claude 로그인' 창의 주소를 브라우저에서 열어 승인하고, 받은 코드를 그 창에 붙여 넣어 주세요"라고 말합니다. 로그인 명령을 대신 치지 않습니다
+   - 앞 줄이 `gh가 GitHub에 로그인돼 있지 않아`면 사람에게 "저장소에 초대된 GitHub 계정이 있나요?"라고 묻습니다. 있으면 그 줄의 `wsl -d … gh auth login …` 명령을 백그라운드로 돌려 `one-time code`를 위처럼 보여 주고, 승인 뒤 `powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\aivengers-install.ps1 -AppOnly -NoBrowser`(앱만)를 돌려 `APP_STARTED`를 확인합니다. 없으면 출력의 zip 안내를 전하고 멈춥니다
 4. 재부팅 뒤 사람이 이 대화로 돌아와 물으면 `%LOCALAPPDATA%\Aivengers\logs`의 가장 새 `install-*.log` 끝 30줄을 읽어 상태를 알려 줍니다
-5. 사람이 로그인했다고 하면 아래를 돌려 `# · PASS/FAIL · 출력 한 줄` 표로 보고합니다
-   - `curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:45180/api/auth/me` → `200`
-   - `curl.exe -s -o NUL -w "%{http_code}" http://localhost:45180/api/auth/me` → `200`
-   - `wsl -d Ubuntu-24.04 -- ls -ln ~/.local/share/aivengers/data` → 소유자 `1000 1000`, `deploy-token`이 `-rw-------`
+5. 사람이 로그인했다고 하면(이미 로그인돼 건너뛰었으면 바로) 아래를 돌려 `# · PASS/FAIL · 출력 한 줄` 표로 보고합니다. 포트·배포판은 출력의 `서버 응답 200: http://127.0.0.1:<포트>`와 `WSL 배포판 <이름>` 값(보통 45180·Ubuntu-24.04)을 씁니다
+   - `curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:<포트>/api/auth/me` → `200`
+   - `curl.exe -s -o NUL -w "%{http_code}" http://localhost:<포트>/api/auth/me` → `200`
+   - `wsl -d <배포판> -- ls -ln ~/.local/share/aivengers/data` → 소유자 `1000 1000`, `deploy-token`이 `-rw-------`
 
-- 멈출 조건: 3010이 아닌 0 아닌 종료 코드이거나 `실패:`가 찍히면 고치려 하지 말고 마지막 30줄과 함께 멈춥니다
-- 금지: 토큰·키 파일 내용 출력(`~/.config/gh/hosts.yml`, `deploy-token`, `.credentials.json`, `deploy_key`), 관리자 PowerShell을 따로 열라고 하기(설치기가 UAC로 요청), 사람 동의 없이 재부팅, Docker Desktop 설치, `C:` 아래로 데이터 옮기기
+- 멈출 조건: 3010이 아닌 0 아닌 종료 코드이거나 `실패:`가 찍히면 고치려 하지 말고 마지막 30줄과 함께 멈춥니다(`REPO_DIRTY`는 위 2번대로 묻고 이어 감)
+- 금지: 토큰·키 파일 내용 출력(`~/.config/gh/hosts.yml`, `deploy-token`, `.credentials.json`, `deploy_key`), 관리자 PowerShell을 따로 열라고 하기(설치기가 UAC로 요청), 사람 동의 없이 재부팅, Docker Desktop 설치, `C:` 아래로 데이터 옮기기, 이미 있는 설치 지우기·새로 만들기(`wsl --unregister`, 데이터·설정 폴더 지우기, 배포판 새로 설치), 사본의 바뀐 파일 지우기(`git reset`·`git checkout --`·`git clean`)
 
 ## Mac 서버 내장 설치(예전 방식)
 
@@ -147,5 +171,5 @@ curl -fsSL https://raw.githubusercontent.com/Injae-Lee/aivengers-install/main/in
 - 시험: `sh test/bootstrap.test.sh`(리눅스에서도 돎. Homebrew 설치는 가짜 설치 스크립트로 보고, gh·tarball·실제 Homebrew는 Mac에서만 확인)
 - `install.sh`의 Homebrew 함수는 본체 `scripts/lib/brew-install.sh`와 같은 동작입니다. 바뀌면 같이 고칩니다
 - PR마다 shellcheck와 시험이 돕니다(`.github/workflows/check.yml`). `install.ps1`은 Windows job에서 PSScriptAnalyzer·PowerShell 5.1 파서로 봅니다
-- `install.ps1`은 본체 저장소 `scripts/install.ps1`의 사본입니다(본체가 Windows 쪽만 쓰고 WSL 안에서 clone하므로 그대로 돎). 본체가 바뀌면 같이 갱신합니다. 기준: 본체 `470e024`(AIV-668·671)
+- `install.ps1`은 본체 저장소 `scripts/install.ps1`의 사본입니다(본체가 Windows 쪽만 쓰고 WSL 안에서 clone하므로 그대로 돎). 본체가 바뀌면 같이 갱신합니다. 기준: 본체 `9ae3d7d`(AIV-694)
 - 이 저장소에는 비밀값·내부 주소를 넣지 않습니다
