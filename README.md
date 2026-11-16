@@ -80,6 +80,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\aivengers-install.
 - 기록: `%LOCALAPPDATA%\Aivengers\logs\install-*.log`
 - 옵션: `-DryRun`, `-NoBrowser`, `-NoClaudeLogin`, `-RebootNow`, `-Distro <이름>`, `-Port <번호>`, `-CaFile <PEM>`, `-NoWindowsCa`, `-DeployKey`, `-Branch <이름>`
 - 앱·실행기 옵션: `-NoApp`, `-AppZip <zip>`, `-AppRelease <태그>`, `-NoHostRunner`, `-NoLoginItem`, `-NoGit`(`-HostRunner`는 옛 명령 호환용, 이제 기본)
+- 업데이트: 설치 뒤에는 접속 앱의 설정 › 시스템 › 업데이트 [업데이트하고 다시 열기]가 서버·앱을 새 판으로 바꿉니다. 이 설치기의 `-AppOnly`(WSL·서버 단계 없이 앱만 최신 릴리스로)는 그 버튼이 부릅니다
 - 자세한 내용: 본체 저장소 `docs/install-windows.md`
 
 ### Windows(에이전트용)
@@ -146,5 +147,5 @@ curl -fsSL https://raw.githubusercontent.com/Injae-Lee/aivengers-install/main/in
 - 시험: `sh test/bootstrap.test.sh`(리눅스에서도 돎. Homebrew 설치는 가짜 설치 스크립트로 보고, gh·tarball·실제 Homebrew는 Mac에서만 확인)
 - `install.sh`의 Homebrew 함수는 본체 `scripts/lib/brew-install.sh`와 같은 동작입니다. 바뀌면 같이 고칩니다
 - PR마다 shellcheck와 시험이 돕니다(`.github/workflows/check.yml`). `install.ps1`은 Windows job에서 PSScriptAnalyzer·PowerShell 5.1 파서로 봅니다
-- `install.ps1`은 본체 저장소 `scripts/install.ps1`의 사본입니다(본체가 Windows 쪽만 쓰고 WSL 안에서 clone하므로 그대로 돎). 본체가 바뀌면 같이 갱신합니다. 기준: 본체 `bd08a7f`(AIV-668)
+- `install.ps1`은 본체 저장소 `scripts/install.ps1`의 사본입니다(본체가 Windows 쪽만 쓰고 WSL 안에서 clone하므로 그대로 돎). 본체가 바뀌면 같이 갱신합니다. 기준: 본체 `470e024`(AIV-668·671)
 - 이 저장소에는 비밀값·내부 주소를 넣지 않습니다
