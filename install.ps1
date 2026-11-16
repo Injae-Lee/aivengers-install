@@ -60,6 +60,9 @@ param(
   [string]$AppZip = '',
   # 받을 릴리스 태그(예: desktop-v0.2.0). 비우면 최신 릴리스.
   [string]$AppRelease = '',
+  # 접속 앱만 바꾼다(AIV-671 업데이트 버튼의 앱 단계, scripts/update-windows.ps1이 부름). WSL·GitHub·서버 단계를 건너뛰고
+  # 릴리스(또는 -AppRelease·-AppZip)의 앱으로 바꾼 뒤 다시 연다. desktop.json appRelease가 이미 최신 릴리스면 그대로 둔다.
+  [switch]$AppOnly,
   # 로그인할 때 앱을 열지 않는다(desktop.json "openAtLogin": false). 기본은 켬(감시자가 크래시 때 다시 띄움).
   [switch]$NoLoginItem,
   # Git for Windows가 없을 때 winget으로 깔지 않는다(호스트 작업 봇의 셸·git용).
@@ -267,9 +270,56 @@ function Install-GitForWindows {
   if ($LASTEXITCODE -ne 0) { Write-Step "주의: winget으로 Git을 깔지 못했습니다(종료 코드 $LASTEXITCODE). 'winget install --id Git.Git -e'를 직접 돌려 주세요" }
 }
 
+# 릴리스 저장소 slug(owner/repo). 모르면 빈 값.
+function Get-RepoSlug {
+  if ($RepoUrl -match '^https://github\.com/([^/]+/[^/]+?)(\.git)?/?$') { return $Matches[1] }
+  return ''
+}
+
+# 접속 앱 받기 → 깔기(6단계와 -AppOnly가 함께 씀, AIV-668·671). 돌려주는 값: @{ exe; tag; code }. 못 받으면 exe가 빈 값이고 code가 0 아님.
+function Invoke-DesktopAppInstall([string]$InstallDir) {
+  $zip = ''
+  $tag = ''
+  $code = 0
+  if ($AppZip) {
+    if (-not (Test-Path -LiteralPath $AppZip -PathType Leaf)) { Exit-Install "-AppZip 파일이 없습니다: $AppZip" }
+    $zip = (Resolve-Path -LiteralPath $AppZip).Path
+    $tag = 'local'
+  } else {
+    $slug = Get-RepoSlug
+    $dl = Join-Path $AppDir 'download'
+    New-Item -ItemType Directory -Force -Path $dl | Out-Null
+    $dlWsl = Get-WslLine @('-d', $Distro, '--', 'wslpath', '-a', ($dl -replace '\\', '/')) | Select-Object -First 1
+    if (-not $slug -or -not $dlWsl) { $code = 5 }
+    else {
+      $fetch = $AppFetchScript.Replace('__SLUG__', (ConvertTo-BashQuoted $slug)).Replace('__TAG__', (ConvertTo-BashQuoted $AppRelease))
+      $fetch = $fetch.Replace('__DEST__', (ConvertTo-BashQuoted $dlWsl)).Replace('__ASSET__', (ConvertTo-BashQuoted $AppAsset))
+      $code = Invoke-InDistro $fetch
+    }
+    if ($code -eq 0) {
+      $zip = Join-Path $dl $AppAsset
+      $tagFile = Join-Path $dl 'release.txt'
+      if (Test-Path -LiteralPath $tagFile) { $tag = (Get-Content -LiteralPath $tagFile -Raw).Trim() }
+    } else {
+      Write-Host "주의: 접속 앱을 받지 못했습니다(종료 코드 $code). 서버는 설치됐고 브라우저로 쓸 수 있습니다. 릴리스 zip을 받아 '-AppZip <zip 경로>'로 다시 돌리면 앱만 더 깝니다" -ForegroundColor Yellow
+      Write-Host 'APP_NOT_INSTALLED'
+    }
+  }
+  $exe = ''
+  if ($zip) {
+    Write-Step "접속 앱 설치: $InstallDir ($tag)"
+    $exe = Install-DesktopApp $zip $InstallDir
+    Write-Step "접속 앱: $exe (서명 없음)"
+  }
+  return @{ exe = $exe; tag = $tag; code = $code }
+}
+
 # ---- WSL 켜기·재부팅 이어 하기·사용자 만들기(AIV-616) ----
 # 설치기 자리(%LOCALAPPDATA%\Aivengers): 기록·이어 하기 사본·desktop.json
 $AppDir = Join-Path $(if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } elseif ($env:USERPROFILE) { Join-Path $env:USERPROFILE 'AppData\Local' } else { [System.IO.Path]::GetTempPath() }) 'Aivengers'
+# 접속 앱 자리(AIV-668)와 그 설정이 있는 폴더.
+$localApp = $(if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } elseif ($env:USERPROFILE) { Join-Path $env:USERPROFILE 'AppData\Local' } else { [System.IO.Path]::GetTempPath() })
+$appInstallDir = Join-Path (Join-Path $localApp 'Programs') 'Aivengers Desktop'
 
 # WSL이 돌 수 있는지(기능 켜짐·재부팅 끝). 없는 기능이면 wsl --status가 0이 아니다.
 function Test-WslReady {
@@ -401,6 +451,46 @@ $LogFile = Join-Path $AppDir ("logs\install-{0:yyyyMMdd-HHmmss}.log" -f (Get-Dat
 Start-Transcript -Path $LogFile -Append | Out-Null
 Write-Step "설치 기록: $LogFile"
 if ($Resume) { Write-Step '재부팅 뒤 설치를 이어 갑니다' }
+
+# ---- 앱만 바꾸기(-AppOnly, AIV-671) ----
+# 업데이트 버튼(scripts/update-windows.ps1)이 서버를 새 판으로 배포한 뒤 부른다. WSL·GitHub·서버 단계는 이미 돼 있다고 보고 건너뛴다.
+# 이미 최신 릴리스(desktop.json appRelease)면 앱을 끄지 않는다. 실패하면 '실패:'와 종료 코드 1(Exit-Install).
+if ($AppOnly) {
+  if ($NoApp) { Exit-Install '-AppOnly와 -NoApp은 함께 쓸 수 없습니다' }
+  Write-Step '접속 앱만 바꿉니다(-AppOnly): WSL·GitHub·서버 단계는 건너뜀'
+  $cfgFile = Join-Path $AppDir 'desktop.json'
+  $have = ''
+  if (Test-Path -LiteralPath $cfgFile -PathType Leaf) {
+    try { $c = Get-Content -LiteralPath $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json; if ($c.PSObject.Properties['appRelease']) { $have = [string]$c.appRelease } } catch { $have = '' }
+  }
+  $want = $AppRelease
+  if (-not $want -and -not $AppZip) {
+    $slug = Get-RepoSlug
+    if ($slug) { $want = Get-InDistroLine "gh release view --repo $(ConvertTo-BashQuoted $slug) --json tagName -q .tagName 2>/dev/null || true" | Select-Object -First 1 }
+  }
+  if (-not $AppZip -and $want -and $have -eq $want -and (Test-Path -LiteralPath (Join-Path $appInstallDir $AppExeName))) {
+    Write-Step "접속 앱이 이미 최신 릴리스입니다($have). 그대로 둡니다"
+    Write-Host 'APP_UP_TO_DATE'
+    Write-Host 'INSTALL_DONE'
+    Stop-Transcript | Out-Null
+    exit 0
+  }
+  if ($DryRun) {
+    Write-Step "(dry-run) 접속 앱 $(if ($AppZip) { $AppZip } else { "릴리스 $(if ($want) { $want } else { '최신' })" }) → $appInstallDir(지금 $(if ($have) { $have } else { '모름' })), 다시 열기"
+    Write-Host 'INSTALL_DONE'
+    Stop-Transcript | Out-Null
+    exit 0
+  }
+  $r = Invoke-DesktopAppInstall $appInstallDir
+  if (-not $r.exe) { Exit-Install "접속 앱을 받지 못했습니다(종료 코드 $($r.code)). 서버는 그대로 새 판입니다" }
+  if (Test-Path -LiteralPath $cfgFile -PathType Leaf) { Write-DesktopConfig $cfgFile @{ appDir = $appInstallDir; appRelease = $r.tag } }
+  Write-Step "접속 앱을 엽니다: $($r.exe) ($($r.tag))"
+  Start-Process -FilePath $r.exe
+  Write-Host 'APP_STARTED'
+  Write-Host 'INSTALL_DONE'
+  Stop-Transcript | Out-Null
+  exit 0
+}
 
 # ---- 1 Windows·WSL 확인(없으면 켜기, AIV-616) ----
 if ($env:OS -ne 'Windows_NT') { Exit-Install 'Windows에서 돌리는 설치기입니다. Linux는 scripts/install.sh, Mac은 scripts/install.sh' }
@@ -687,44 +777,14 @@ if ($code -ne 0) { Exit-Install "WSL 안 설치기가 실패했습니다(종료 
 
 # ---- 6 접속 앱 설치(AIV-668) ----
 # GitHub 릴리스의 서명 없는 앱 zip → %LOCALAPPDATA%\Programs\Aivengers Desktop. 못 받으면 서버 설치는 그대로 두고 알린다(APP_NOT_INSTALLED).
-$localApp = $(if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE 'AppData\Local' })
-$appInstallDir = Join-Path (Join-Path $localApp 'Programs') 'Aivengers Desktop'
 $appExe = ''
 $appTag = ''
 if ($NoApp) { Write-Step '접속 앱 설치 건너뜀(-NoApp)' }
 elseif ($DryRun) { Write-Step "(dry-run) 접속 앱 $(if ($AppZip) { $AppZip } else { "릴리스 $(if ($AppRelease) { $AppRelease } else { '최신' }) $AppAsset" }) → $appInstallDir, 시작 메뉴 바로 가기" }
 else {
-  $zip = ''
-  if ($AppZip) {
-    if (-not (Test-Path -LiteralPath $AppZip -PathType Leaf)) { Exit-Install "-AppZip 파일이 없습니다: $AppZip" }
-    $zip = (Resolve-Path -LiteralPath $AppZip).Path
-    $appTag = 'local'
-  } else {
-    $slug = ''
-    if ($RepoUrl -match '^https://github\.com/([^/]+/[^/]+?)(\.git)?/?$') { $slug = $Matches[1] }
-    $dl = Join-Path $AppDir 'download'
-    New-Item -ItemType Directory -Force -Path $dl | Out-Null
-    $dlWsl = Get-WslLine @('-d', $Distro, '--', 'wslpath', '-a', ($dl -replace '\\', '/')) | Select-Object -First 1
-    if (-not $slug -or -not $dlWsl) { $code = 5 }
-    else {
-      $fetch = $AppFetchScript.Replace('__SLUG__', (ConvertTo-BashQuoted $slug)).Replace('__TAG__', (ConvertTo-BashQuoted $AppRelease))
-      $fetch = $fetch.Replace('__DEST__', (ConvertTo-BashQuoted $dlWsl)).Replace('__ASSET__', (ConvertTo-BashQuoted $AppAsset))
-      $code = Invoke-InDistro $fetch
-    }
-    if ($code -eq 0) {
-      $zip = Join-Path $dl $AppAsset
-      $tagFile = Join-Path $dl 'release.txt'
-      if (Test-Path -LiteralPath $tagFile) { $appTag = (Get-Content -LiteralPath $tagFile -Raw).Trim() }
-    } else {
-      Write-Host "주의: 접속 앱을 받지 못했습니다(종료 코드 $code). 서버는 설치됐고 브라우저로 쓸 수 있습니다. 릴리스 zip을 받아 '-AppZip <zip 경로>'로 다시 돌리면 앱만 더 깝니다" -ForegroundColor Yellow
-      Write-Host 'APP_NOT_INSTALLED'
-    }
-  }
-  if ($zip) {
-    Write-Step "접속 앱 설치: $appInstallDir ($appTag)"
-    $appExe = Install-DesktopApp $zip $appInstallDir
-    Write-Step "접속 앱: $appExe (서명 없음)"
-  }
+  $r = Invoke-DesktopAppInstall $appInstallDir
+  $appExe = $r.exe
+  $appTag = $r.tag
 }
 if ($NoGit) { Write-Step 'Git for Windows 확인 건너뜀(-NoGit)' }
 elseif ($DryRun) { Write-Step '(dry-run) Git for Windows가 없으면 winget install --id Git.Git --scope user' }
