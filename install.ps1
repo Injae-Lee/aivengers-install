@@ -477,8 +477,16 @@ fi
 f=${AIV_WSL_CONF:-/etc/wsl.conf}
 touch "$f"
 if grep -q '^\[user\]' "$f"; then
-  sed -i '/^\[user\]/,/^\[/{/^default[[:space:]]*=/d}' "$f"
-  sed -i "/^\[user\]/a default=$U" "$f"
+  tmp=$(mktemp "$f.tmp.XXXXXX")
+  trap 'rm -f "$tmp"' EXIT
+  cp -p "$f" "$tmp"
+  awk -v user="$U" '
+    /^\[/ { in_user = /^\[user\]/ }
+    /^\[user\]/ { print; print "default=" user; next }
+    in_user && /^default[[:space:]]*=/ { next }
+    { print }
+  ' "$f" > "$tmp"
+  mv -f "$tmp" "$f"
 else
   printf '\n[user]\ndefault=%s\n' "$U" >> "$f"
 fi
